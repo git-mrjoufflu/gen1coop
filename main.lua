@@ -180,6 +180,23 @@
 -- frame" isn't visible by the time render.hud runs; worldPipeline()
 -- answers the persistent "is one active right now" question instead.
 --
+-- v0.0.26: "ca ne fonctionne pas l'auto host" - confirmed (via a
+-- follow-up question) that FIND HOST runs correctly end to end
+-- ("searching LAN..." then "no host found" after the timeout), so the
+-- beacon itself just wasn't reaching the other device. The limited
+-- broadcast address (255.255.255.255) is known to be unreliable in
+-- practice - plenty of routers/OS network stacks don't forward it the
+-- way a directed subnet broadcast (a.b.c.255 for a /24) does. Host now
+-- also computes and sends to that address (guessed from its own IP via
+-- localIP() - LuaSocket doesn't expose a real netmask, but /24 covers
+-- the overwhelming majority of home/guest networks this targets), on
+-- top of the original 255.255.255.255 send, not instead of it. Also
+-- started checking sendto's own return value (previously ignored
+-- entirely) and logging failures, so a still-not-working report has
+-- something concrete to go on. If this still doesn't find a host,
+-- Windows Firewall blocking the new UDP port outright is the next
+-- likely suspect - outside anything this mod's own code can work around.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -374,6 +391,10 @@ return function(mod)
   -- host only: UDP socket the periodic FIND HOST beacon goes out on
   local discoveryBeacon = nil
   local discoveryTick = 0 -- frame counter, so the beacon sends roughly once a second, not every input.step
+  -- host only: a.b.c.255 guess (see startHost) - sent alongside the
+  -- limited broadcast (255.255.255.255), which some networks don't
+  -- forward reliably; nil if the host's own IP couldn't be read
+  local discoverySubnetBroadcast = nil
   -- client only: UDP socket while state == "discovering", plus when the
   -- search started (for DISCOVERY_TIMEOUT_SECONDS)
   local discoveryListener = nil
@@ -463,6 +484,21 @@ return function(mod)
       mod.log:warn("discovery beacon: socket.udp() failed: %s", tostring(du))
     end
     local ip = localIP()
+    -- the *limited* broadcast (255.255.255.255) is the one that's
+    -- unreliable in practice - some routers/OS network stacks don't
+    -- forward it the way a *directed* subnet broadcast (a.b.c.255 for a
+    -- /24, the overwhelmingly common home-network case) does. Sending to
+    -- both costs one extra tiny UDP packet a second and meaningfully
+    -- raises the odds FIND HOST actually works - assuming a /24 is a
+    -- guess, not something LuaSocket exposes a real netmask for, but a
+    -- safe one for the home/guest-network setups this is aimed at.
+    if ip then
+      local a, b, c = ip:match("^(%d+)%.(%d+)%.(%d+)%.%d+$")
+      if a then
+        discoverySubnetBroadcast = ("%s.%s.%s.255"):format(a, b, c)
+        mod.log:info("discovery beacon: also broadcasting to %s", discoverySubnetBroadcast)
+      end
+    end
     mod.log:info("hosting on port %d (ip %s), waiting for a player to join...",
       PORT, tostring(ip))
     if ip then
@@ -1052,7 +1088,24 @@ return function(mod)
     discoveryTick = discoveryTick + 1
     if discoveryTick < DISCOVERY_TICK_FRAMES then return end
     discoveryTick = 0
-    discoveryBeacon:sendto(DISCOVERY_MAGIC .. localName(), "255.255.255.255", DISCOVERY_PORT)
+    local payload = DISCOVERY_MAGIC .. localName()
+    -- both addresses, not just one: the limited broadcast
+    -- (255.255.255.255) is the one that turned out unreliable in real
+    -- testing ("ca ne fonctionne pas l'auto host") - some routers/OS
+    -- network stacks don't forward it the way a directed subnet
+    -- broadcast does. Logged on failure (previously not checked at all)
+    -- so a still-not-working report has something to go on beyond
+    -- "didn't work."
+    local ok1, err1 = discoveryBeacon:sendto(payload, "255.255.255.255", DISCOVERY_PORT)
+    if not ok1 then
+      mod.log:warn("discovery beacon: sendto 255.255.255.255 failed: %s", tostring(err1))
+    end
+    if discoverySubnetBroadcast then
+      local ok2, err2 = discoveryBeacon:sendto(payload, discoverySubnetBroadcast, DISCOVERY_PORT)
+      if not ok2 then
+        mod.log:warn("discovery beacon: sendto %s failed: %s", discoverySubnetBroadcast, tostring(err2))
+      end
+    end
   end
 
   -- Wire format is asymmetric on purpose: a client's outgoing line is

@@ -10,6 +10,41 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.26: FIND HOST still not finding anything - try the subnet broadcast too
+
+MrJoufflu: "ca ne fonctionne pas l'auto host." Vague on its own, so
+asked a follow-up (multiple-choice: did it show "searching..." then
+"no host found," did nothing happen at all, a different error, or a
+freeze/crash) rather than guess blind - the answer ("Searching LAN..."
+puis "no host found") confirmed the FEATURE ITSELF runs correctly end
+to end (menu opens, socket binds, timeout fires, error message shows);
+the beacon packet just wasn't reaching the other device. That rules out
+a logic bug in this mod's own state machine and narrows it to the
+UDP broadcast mechanism itself.
+
+The limited broadcast address, `255.255.255.255`, is a known-flaky
+choice in practice - plenty of home routers and OS network stacks
+don't forward it the way they forward a *directed* subnet broadcast
+(`a.b.c.255` for a `/24` network) - this is a well-documented general
+UDP-discovery gotcha, not specific to LuaSocket or this engine.
+`startHost()` now also computes that address from the host's own
+`localIP()` result (assumes a `/24` - LuaSocket doesn't expose a real
+netmask, but a `/24` covers the large majority of home/guest-network
+setups this feature targets) and `broadcastDiscovery()` sends the
+beacon to BOTH addresses every tick, not just the original one. Also
+started checking `sendto`'s own return value for the first time
+(previously silently ignored) and logging any failure, so if this is
+still broken, the next report has an actual error message to go on
+instead of just "didn't work."
+
+Flagged honestly: if this STILL doesn't find anything, Windows Firewall
+silently blocking the new UDP port (51821) on first use is the next
+most likely suspect, and that's outside anything fixable from inside
+this mod - same category of issue as the earlier direct-connection
+firewall/AP-isolation troubleshooting in v0.0.9/v0.0.10's history.
+Manual JOIN with a typed IP remains the guaranteed-to-work fallback
+regardless of how FIND HOST behaves.
+
 ## v0.0.25: name label unstable in "vox3d" - a third-party pipeline, not Tilt
 
 MrJoufflu, with a screenshot: "les nom quand on est en vox3d bouge et ne

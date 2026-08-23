@@ -1,0 +1,5 @@
+{
+  "id": "gen1coop",
+  "title": "Gen1 Co-op (prototype)",
+  "summary": "Step 1 of a co-op prototype: direct TCP connection between two players, position sync logged only (no visuals yet)."
+}

@@ -10,7 +10,29 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.8) built, awaiting real two-player test
+## Status: Step 1 (v0.0.9) built, awaiting real two-player test
+
+**v0.0.9 - two more issues from testing v0.0.8:** host's textbox showed
+"port en attente" with no IP (the `localIP()` UDP trick, or its
+hostname-resolution fallback, failed silently on whichever device this
+was tested on - added `mod.log:warn` at every failure point inside
+`localIP()` so the *reason* is at least visible via the dev console next
+time, even though the textbox itself just omits the IP line either way).
+More importantly: joining with a typed IP and pressing ED did "rien" -
+the real suspect is `startClient`'s old 5-second *blocking* `connect()`
+call, which runs on the frame that handles the ED press and would freeze
+the whole game for up to 5s with zero feedback until it resolved -
+plausibly exactly what read as "nothing happening" (or a fast failure
+nobody waited through). Rewrote it non-blocking: `connect()` on a
+timeout-0 socket returns immediately (an in-progress attempt looks like
+an ordinary "timeout" error, not a real failure), a new `state =
+"connecting"` is polled every `world.stepped` via `socket.select`, and
+`getpeername()` on the resulting socket distinguishes an actually-
+established connection from a completed-but-failed one. Also added a
+`Gen1Coop:\nIP vide,\nressaie.` message for an empty confirm (in case
+digit entry silently wasn't registering anything), and a log line at the
+very top of `onDone` so a future "rien" report can at least confirm
+whether the naming screen's confirm callback fires at all.
 
 **v0.0.8 - two fixes from real testing feedback:**
 1. v0.0.7 loaded fine (GEN1COOP appeared in the START menu) but choosing

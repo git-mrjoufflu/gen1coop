@@ -85,21 +85,34 @@ return function(mod)
   -- ipconfig/Settings is still an option.
   local function localIP()
     local ok, udp = pcall(socket.udp)
-    if ok and udp then
-      local connected = udp:setpeername("8.8.8.8", 80)
+    if not ok then
+      mod.log:warn("localIP: socket.udp() threw: %s", tostring(udp))
+    elseif not udp then
+      mod.log:warn("localIP: socket.udp() returned nil")
+    else
+      local connected, cerr = udp:setpeername("8.8.8.8", 80)
       if connected then
         local ip = udp:getsockname()
         udp:close()
         if ip then return ip end
+        mod.log:warn("localIP: getsockname() returned nothing after connect")
       else
+        mod.log:warn("localIP: udp:setpeername failed: %s", tostring(cerr))
         udp:close()
       end
     end
-    local hostname = socket.dns.gethostname and socket.dns.gethostname()
-    if hostname then
-      local ip = socket.dns.toip and select(1, socket.dns.toip(hostname))
-      if ip and ip ~= "127.0.0.1" then return ip end
+    if not (socket.dns and socket.dns.gethostname) then
+      mod.log:warn("localIP: socket.dns.gethostname not available")
+      return nil
     end
+    local hostname = socket.dns.gethostname()
+    if not hostname then
+      mod.log:warn("localIP: gethostname() returned nothing")
+      return nil
+    end
+    local ip = socket.dns.toip and select(1, socket.dns.toip(hostname))
+    if ip and ip ~= "127.0.0.1" then return ip end
+    mod.log:warn("localIP: toip(%s) gave %s", tostring(hostname), tostring(ip))
     return nil
   end
 
@@ -126,24 +139,67 @@ return function(mod)
     end
   end
 
+  -- socket mid-connect, or nil once resolved either way
+  local pendingConnect = nil
+
+  -- non-blocking connect: a 5s *blocking* attempt (the old v0.0.8
+  -- behavior) freezes the whole game on the calling frame - reported as
+  -- "ca fait rien" was plausibly that freeze reading as nothing
+  -- happening, or a fast failure someone didn't wait through. connect()
+  -- on a timeout-0 socket returns immediately with "timeout" while the
+  -- OS handshake is still in flight (that's success-so-far, not an
+  -- error); pollConnect() (called from world.stepped) checks completion.
   local function startClient(ip)
     if not ensureSocket() then return end
     isHost = false
     local s = socket.tcp()
-    s:settimeout(5) -- one-time blocking connect attempt, 5s cap
+    s:settimeout(0)
     local ok, err = s:connect(ip, PORT)
-    if not ok then
-      mod.log:error("could not connect to %s:%d - %s", ip, PORT, tostring(err))
-      state = "error"
-      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(ip))
+    if ok then
+      -- rare, but possible for a same-machine test: connected instantly
+      peer = s
+      state = "connected"
+      mod.log:info("connected to host %s:%d", ip, PORT)
+      mod.save:set("last_ip", ip)
+      notify(("Gen1Coop:\nconnecte a\n%s!"):format(ip))
       return
     end
-    s:settimeout(0) -- non-blocking from here on
-    peer = s
-    state = "connected"
-    mod.log:info("connected to host %s:%d", ip, PORT)
-    mod.save:set("last_ip", ip)
-    notify(("Gen1Coop:\nconnecte a\n%s!"):format(ip))
+    if err ~= "timeout" and err ~= "Operation already in progress" then
+      mod.log:error("could not connect to %s:%d - %s", ip, PORT, tostring(err))
+      state = "error"
+      notify(("Gen1Coop:\nconnexion a\n%s\nratee:\n%s"):format(ip, tostring(err)))
+      return
+    end
+    pendingConnect = { socket = s, ip = ip }
+    state = "connecting"
+    mod.log:info("connecting to %s:%d...", ip, PORT)
+    notify(("Gen1Coop:\nconnexion a\n%s..."):format(ip))
+  end
+
+  local function pollConnect()
+    if not pendingConnect then return end
+    local s = pendingConnect.socket
+    local _, writable = socket.select(nil, { s }, 0)
+    if not writable or #writable == 0 then
+      return -- still in progress, check again next step
+    end
+    -- getpeername only succeeds on an actually-established connection;
+    -- a failed non-blocking connect shows up as "writable" too, just
+    -- without a real peer on the other end
+    local peername = s:getpeername()
+    if peername then
+      peer = s
+      state = "connected"
+      mod.log:info("connected to host %s:%d", pendingConnect.ip, PORT)
+      mod.save:set("last_ip", pendingConnect.ip)
+      notify(("Gen1Coop:\nconnecte a\n%s!"):format(pendingConnect.ip))
+    else
+      mod.log:error("connect to %s:%d failed (not established)", pendingConnect.ip, PORT)
+      state = "error"
+      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(pendingConnect.ip))
+      s:close()
+    end
+    pendingConnect = nil
   end
 
   local function openConnectMenu()
@@ -156,7 +212,15 @@ return function(mod)
             maxLen = 15,
             default = mod.save:get("last_ip", ""),
             onDone = function(ip, confirmed)
-              if confirmed and ip ~= "" then startClient(ip) end
+              mod.log:info("naming onDone: ip=%s confirmed=%s", tostring(ip), tostring(confirmed))
+              if not confirmed then
+                return -- B/cancel - no message, this is a normal back-out
+              end
+              if ip == "" then
+                notify("Gen1Coop:\nIP vide,\nressaie.")
+                return
+              end
+              startClient(ip)
             end,
           }))
         end },
@@ -232,6 +296,9 @@ return function(mod)
   mod.events:on("world.stepped", function(payload)
     if isHost then
       serviceHost()
+    end
+    if state == "connecting" then
+      pollConnect()
     end
     if state == "connected" then
       sendPosition(payload)

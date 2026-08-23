@@ -1,7 +1,7 @@
 {
   "id": "gen1coop",
   "name": "Gen1 Co-op (prototype)",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "github": "git-mrjoufflu/gen1coop",
   "api": 2,
   "permissions": ["network"],
@@ -13,5 +13,5 @@
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],
-  "description": "Experimental overworld co-op prototype. Fully in-game menu: START > GEN1COOP > HOST or JOIN (numeric keypad for the host's IP). Every outcome shows an in-game textbox, no console or config file editing needed. No visible remote player yet - this is step 1: prove the connection works."
+  "description": "Experimental overworld co-op prototype for up to 10 players. Fully in-game menu: START > GEN1COOP > HOST or JOIN (numeric keypad for the host's IP). Host relays every player's position to everyone else. Every outcome shows an in-game textbox, no console or config file editing needed. No visible remote players yet - this is step 1: prove the connections and relay work."
 }

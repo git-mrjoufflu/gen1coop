@@ -24,21 +24,70 @@ running under the hood since v0.0.1 and should now actually be flowing
 between the two connected peers, though nothing renders it yet - that's
 step 2.
 
-## Next: Step 2 - visible remote player
+## v0.0.11: N players (up to 10), not yet tested past 2
 
-Not started. Plan (from the original roadmap): spawn a placeholder
-sprite at the peer's last reported position, shown/hidden based on
-whether both players currently share a `mapId`. Open question carried
-over from the start of this project and still unresolved: gen1recomp's
-sanctioned mod API has no obvious "spawn an NPC at runtime" surface (the
-`maps` registry's `objects` field is static map data merged at load
-time, not a live spawn call) - Gen1Online reached directly into
-`src.world.NPC` and `src.render.SpriteRenderer` for this, bypassing the
-mod sandbox the same way this project had to for networking. Needs the
-same kind of source-reading pass that found `mod.hooks:wrap`,
-`ui.start_menu.items`, and the `network` permission - check whether
-there's a real spawn API before assuming another sandbox reach-around is
-required.
+MrJoufflu asked for up to ~10 players before going further into visible
+avatars. Restructured from a single 1:1 connection into a star topology:
+every client still only ever opens ONE connection (to the host), and the
+host's own game process relays each player's position to everyone else -
+not a full mesh, so nobody but the host needs to know more than one IP.
+
+- `MAX_PLAYERS = 10` (host + 9 joiners). `serviceHost()` no longer stops
+  accepting after the first join - keeps accepting up to capacity.
+- Host tracks `peers` (list of `{socket, id}`) instead of a single
+  `peer`; joining players get sequential ids from `nextPeerId` (host is
+  implicitly id 0).
+- Wire format is now asymmetric on purpose: client -> host stays
+  untagged (`mapId,x,y`, host knows the sender from which socket the
+  data arrived on); host -> client is tagged (`id,mapId,x,y`, since a
+  client needs to know whose position this is - the host's own or any
+  relayed peer's).
+- `hostRelay()` (new, host-only): sends the host's own tagged position to
+  every peer, then for each peer drains what they sent and relays it,
+  tagged with that peer's id, to every OTHER peer. Also cleans up peers
+  whose socket errors out (logs + a "joueur N deconnecte" textbox).
+- Not yet tested with more than 2 devices - the 2-device test that
+  confirmed step 1 predates this change.
+
+## Requested next: internet play, not just LAN (no VPN)
+
+MrJoufflu wants to play with viewers/friends over the internet, not just
+same-network LAN, without requiring a VPN tool (Hamachi/Radmin/Tailscale
+etc. explicitly ruled out - wants it built into the mod). Two realistic
+paths, not yet decided between:
+
+1. **Host port-forwards manually.** Zero new code - the host already
+   listens on a plain TCP port (51820); forwarding that port on their
+   router and sharing their *public* IP instead of LAN IP would work
+   with the exact same JOIN flow that already exists. Requires the host
+   to touch their router's admin panel (port forwarding), which not
+   every streamer/host will want or know how to do, but ships with no
+   further mod changes - just documentation.
+2. **A relay/rendezvous server.** Real infrastructure (a small server
+   living outside any player's game, that host and clients connect OUT
+   to - outbound connections work almost everywhere without router
+   config). Friendlier for hosts (nothing to configure), but a genuinely
+   bigger commitment: needs to be built, hosted, and kept running,
+   similar in shape to what Gen1Online's GTS server does for trading.
+   This is what step 6 of the original roadmap called "relay server /
+   actual internet play - deliberately deferred" - still true, this
+   would be un-deferring it.
+
+## Step 2 (unstarted): visible remote player
+
+Plan (from the original roadmap): spawn a placeholder sprite per
+connected player at their last reported position, shown/hidden based on
+whether they currently share a `mapId` with the local player. Open
+question carried over from the start of this project and still
+unresolved: gen1recomp's sanctioned mod API has no obvious "spawn an NPC
+at runtime" surface (the `maps` registry's `objects` field is static map
+data merged at load time, not a live spawn call) - Gen1Online reached
+directly into `src.world.NPC` and `src.render.SpriteRenderer` for this,
+bypassing the mod sandbox the same way this project had to for
+networking. Needs the same kind of source-reading pass that found
+`mod.hooks:wrap`, `ui.start_menu.items`, and the `network` permission -
+check whether there's a real spawn API before assuming another sandbox
+reach-around is required.
 
 **v0.0.10:** v0.0.9's non-blocking connect worked as designed - MrJoufflu
 saw "connexion a 192.168.2.65..." appear instantly (phone hosting, PC

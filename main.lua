@@ -1,8 +1,9 @@
--- Gen1 Co-op prototype, step 1: prove two gen1recomp instances can talk
--- to each other at all. No visible remote player yet - the point of this
--- slice is the connection itself, shown via an in-game textbox.
+-- Gen1 Co-op prototype, step 1: prove gen1recomp instances can talk to
+-- each other at all, for up to MAX_PLAYERS players at once. No visible
+-- remote players yet - the point of this slice is the connection and
+-- position sync themselves, shown via in-game textboxes and logged.
 --
--- v0.0.6: everything is driven from an in-game menu now instead of a
+-- v0.0.6: everything is driven from an in-game menu instead of a
 -- hand-edited config.lua. START menu > GEN1COOP > HOST or JOIN. JOIN
 -- opens a numeric keypad (built on NamingScreen, the same widget the
 -- naming/nickname screens use, with a custom digits-and-dot grid scoped
@@ -11,11 +12,18 @@
 -- text file inside an installed mod's folder isn't practical the way it
 -- is on PC.
 --
+-- v0.0.11: star topology for >2 players - every client still only opens
+-- ONE connection (to the host), and the host relays each player's
+-- position to everyone else. Not a full mesh (nobody but the host needs
+-- to know more than one IP), but it does mean the host's own game
+-- process is doing double duty as the relay, so if the host quits,
+-- everyone's connection drops.
+--
 -- Known rough edges, on purpose for a first slice:
--- - LAN/port-forward only, no relay server. Fixed port 51820.
+-- - LAN/port-forward only, no dedicated relay server. Fixed port 51820.
 -- - Polling only happens on world.stepped (the local player has to move
---   for the socket to be serviced), not every frame.
--- - One peer only. No reconnect handling.
+--   for sockets to be serviced), not every frame.
+-- - No reconnect handling if a connection drops.
 -- - Needs the "network" permission (declared in manifest.json) - mods
 --   run in a real sandbox (src/mods/Sandbox.lua) that denies
 --   require("socket") without it.
@@ -27,6 +35,13 @@ return function(mod)
 
   local PORT = 51820
   local NAMING_TITLE = "IP DU HOST?"
+  -- host + up to this many clients. Star topology: every client only
+  -- ever opens ONE connection (to the host), and the host relays each
+  -- player's position to everyone else - not a full mesh, so this is
+  -- one extra "relay" duty for the host's own game process, not a
+  -- separate server. Simplest way to get N players without asking
+  -- everyone to know everyone else's IP.
+  local MAX_PLAYERS = 10
 
   -- numeric keypad grid for IP entry - NamingScreen requires an "ED"
   -- confirm cell and a trailing single-cell case-switch row to keep its
@@ -56,13 +71,18 @@ return function(mod)
     game.stack:push(TextBox.new(game, text, function() end))
   end
 
-  -- state: "idle" -> "listening" (host, waiting for a client) or
+  -- state: "idle" -> "listening" (host, waiting for players) or
   -- "connecting" (client) -> "connected" -> "error"
+  -- Host and client use different shapes of "who am I talking to":
+  -- a client only ever has one connection (to the host), a host has a
+  -- growing list as players join.
   local state = "idle"
   local isHost = false
-  local master = nil -- host's listening socket
-  local peer = nil    -- the live connection to the other player, once up
-  local socket = nil  -- set once require("socket") is confirmed to work
+  local master = nil  -- host's listening socket
+  local peer = nil     -- client only: the one connection to the host
+  local peers = {}     -- host only: list of { socket, id }, one per joined player
+  local nextPeerId = 1 -- host only: 0 is the host itself, 1+ for joiners
+  local socket = nil   -- set once require("socket") is confirmed to work
 
   local function ensureSocket()
     if socket then return true end
@@ -262,19 +282,67 @@ return function(mod)
     return next(game, items)
   end)
 
-  -- non-blocking accept: keeps trying every step until a client shows up
+  -- host only: keeps accepting new players every step, up to capacity,
+  -- for as long as hosting is on (unlike the old single-peer version,
+  -- this never stops accepting just because someone already joined)
   local function serviceHost()
-    if state ~= "listening" then return end
+    if #peers >= MAX_PLAYERS - 1 then return end -- host itself is one slot
     local s = master:accept()
     if s then
       s:settimeout(0)
-      peer = s
-      state = "connected"
-      mod.log:info("player joined!")
-      notify("Gen1Coop:\nun joueur s'est\nconnecte!")
+      local id = nextPeerId
+      nextPeerId = nextPeerId + 1
+      table.insert(peers, { socket = s, id = id })
+      mod.log:info("player %d joined (%d/%d)", id, #peers, MAX_PLAYERS - 1)
+      notify(("Gen1Coop:\njoueur %d\nconnecte!\n(%d/%d)"):format(id, #peers, MAX_PLAYERS - 1))
     end
   end
 
+  -- host only: sends the host's own position to every connected player
+  -- (tagged id 0), then for each player, drains whatever they sent and
+  -- relays it (tagged with THAT player's id) to every OTHER player.
+  -- Wire format is asymmetric on purpose: a client's outgoing line is
+  -- untagged ("mapId,x,y") since the host already knows who sent it from
+  -- which socket the data arrived on; everything the host sends out is
+  -- tagged ("id,mapId,x,y") since the receiving client needs to know
+  -- whose position this is, and it could be the host's or any peer's.
+  local function hostRelay(payload)
+    local hostLine = string.format("0,%s,%d,%d\n", tostring(payload.mapId), payload.x, payload.y)
+    for _, p in ipairs(peers) do
+      p.socket:send(hostLine) -- best-effort; a dead peer gets cleaned up below
+    end
+
+    local dead = {}
+    for i, p in ipairs(peers) do
+      while true do
+        local line, err = p.socket:receive("*l")
+        if line then
+          local mapId, x, y = line:match("^(.-),(%-?%d+),(%-?%d+)$")
+          if mapId then
+            mod.log:info("player %d: map=%s x=%s y=%s", p.id, mapId, x, y)
+            local relayLine = string.format("%d,%s,%s,%s\n", p.id, mapId, x, y)
+            for j, other in ipairs(peers) do
+              if j ~= i then other.socket:send(relayLine) end
+            end
+          end
+        elseif err == "timeout" then
+          break -- nothing more from this player right now
+        else
+          mod.log:warn("player %d receive failed: %s - disconnected", p.id, tostring(err))
+          table.insert(dead, i)
+          break
+        end
+      end
+    end
+    for i = #dead, 1, -1 do
+      local p = peers[dead[i]]
+      notify(("Gen1Coop:\njoueur %d\ndeconnecte."):format(p.id))
+      table.remove(peers, dead[i])
+    end
+  end
+
+  -- client only: sends this player's own position to the host, untagged
+  -- (see hostRelay's comment on the wire format)
   local function sendPosition(payload)
     if not peer then return end
     local line = string.format("%s,%d,%d\n", tostring(payload.mapId), payload.x, payload.y)
@@ -287,14 +355,16 @@ return function(mod)
     end
   end
 
+  -- client only: everything the host sends is tagged "id,mapId,x,y" -
+  -- id 0 is the host, anything else is a relayed player
   local function receivePositions()
     if not peer then return end
     while true do
       local line, err = peer:receive("*l")
       if line then
-        local mapId, x, y = line:match("^(.-),(%-?%d+),(%-?%d+)$")
-        if mapId then
-          mod.log:info("peer: map=%s x=%s y=%s", mapId, x, y)
+        local id, mapId, x, y = line:match("^(%-?%d+),(.-),(%-?%d+),(%-?%d+)$")
+        if id then
+          mod.log:info("player %s: map=%s x=%s y=%s", id, mapId, x, y)
         end
       elseif err == "timeout" then
         break -- nothing more to read right now, try again next step
@@ -314,6 +384,8 @@ return function(mod)
   mod.events:on("world.stepped", function(payload)
     if isHost then
       serviceHost()
+      hostRelay(payload)
+      return
     end
     if state == "connecting" then
       pollConnect()

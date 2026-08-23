@@ -108,10 +108,11 @@ still running and you copied the address correctly.
   walking with real animation and facing the direction they're actually
   moving - not just a static marker. A position update that isn't a
   normal single-tile step (a warp, or first spotting someone on a map)
-  still snaps instead of animating. Their name only shows in the
-  **PLAYERS** list, not floating over their marker in the world (the
-  engine doesn't expose the world-camera geometry mods would need to
-  place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
+  still snaps instead of animating. Their name now floats above them too
+  - this is the least-tested part of the mod (see `PROGRESS.md`'s
+    v0.0.21 notes): the exact position is read off the engine's own
+  render math rather than tuned against a real screenshot, so it may
+  need adjusting once it's actually seen in game.
 - Fixed default port (51820) for LAN hosting, not configurable in-game
   (yet). Relay addresses can use any port, since they're typed in full.
 - LAN star topology: if the host quits, everyone's connection drops (the

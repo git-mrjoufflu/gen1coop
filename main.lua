@@ -115,6 +115,23 @@
 -- the live Player object directly, declared via the new
 -- "engine_internals" permission.
 --
+-- v0.0.21: "panse tu qu'on peu mettre le nom des joueur au dessus de
+-- sprite" - the floating name label v0.0.16 turned down. Revisited it
+-- now that v0.0.20 already opened the engine_internals door: drawNameLabels
+-- (wrapping render.hud) reconstructs the world canvas's on-screen
+-- placement itself, mirroring Renderer:endFrame's own math
+-- (Renderer:fitScale(), Zoom.scale(), the world canvas's real size,
+-- displayMetrics() rebuilt from plain love.graphics.* calls) since
+-- render.hud's own viewport is letterbox-only and doesn't expose it.
+-- Deliberately skips drawing rather than guessing wrong: only when the
+-- overworld is the actual TOP of the state stack (not merely present
+-- underneath a menu/battle), and never in Tilt mode (a perspective
+-- projection, not a flat map this math could follow). Each label draws
+-- inside its own pcall, with love.graphics.push()/pop() kept OUTSIDE
+-- that pcall so one failure can't leave the transform/color stack
+-- unbalanced for whatever draws next - this is screen-space code with no
+-- way for me to watch it run, so it has to fail safe by construction.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -130,6 +147,13 @@ return function(mod)
   -- dependency in this mod besides raw sockets, see that function's
   -- comment for why there's no sanctioned alternative
   local SpriteRenderer = require("src.render.SpriteRenderer")
+  -- for drawNameLabels() (render.hud) - see that function's long comment
+  -- for why this reaches this deep: render.hud's own viewport is
+  -- letterbox-only geometry, not the world canvas's placement
+  local Renderer = require("src.render.Renderer")
+  local Zoom = require("src.render.Zoom")
+  local Tilt = require("src.render.Tilt")
+  local Font = require("src.render.Font")
 
   local PORT = 51820
   -- accepts a plain LAN IP or a "host:port" relay address - kept short,
@@ -691,6 +715,129 @@ return function(mod)
     end
   end
 
+  -- floating name labels above each visible marker (the ask this project
+  -- turned down back in v0.0.16, when only the color-marker version
+  -- existed - see PROGRESS.md for the full history of why, and what
+  -- changed to make this attempt worth trying now).
+  --
+  -- render.hud's own viewport (src/core/Game.lua, docs/modding.md) is
+  -- explicitly letterbox-only geometry - "use the letterbox margins
+  -- without drawing over the playfield" - not the WORLD canvas's own
+  -- placement on screen, which isn't exposed to mods anywhere. This
+  -- reconstructs that placement itself, mirroring the exact math
+  -- Renderer:endFrame uses internally (src/render/Renderer.lua) for its
+  -- `elseif self.worldActive then` branch: displayMetrics() (window vs.
+  -- framebuffer pixels and per-axis DPI - built entirely from plain
+  -- love.graphics.* calls, not engine-private), Renderer:fitScale() (a
+  -- real public method), Zoom.scale() (public), and
+  -- Renderer.worldCanvas:getWidth/Height() (a real love Canvas -
+  -- PixelCanvas.lua's own comment confirms getWidth/Height "always
+  -- reported the requested size", so no need to also replicate
+  -- worldViewSize()'s own zoom/tilt sizing logic).
+  --
+  -- Deliberately conservative about when to even attempt this:
+  -- - game.stack:top() ~= the live overworld state -> skip. mod.world's
+  --   own overworld() resolves the world state even when something is
+  --   pushed OVER it (a menu, a battle) - "so a state pushed over the
+  --   world still resolves to the world underneath it" - which is right
+  --   for spawnNpc/etc, but wrong here: a label must only draw when the
+  --   world is actually what's on screen, not guessed to be underneath
+  --   something opaque.
+  -- - Tilt.active() -> skip. Tilt mode projects the ground through a
+  --   perspective mesh (src/render/Tilt.lua's drawTiltedWorld) - not a
+  --   flat linear map, so this math would place labels wrong instead of
+  --   just not placing them. Skipping is honest; guessing isn't.
+  -- Each marker's own draw is wrapped in its own pcall with the
+  -- push/pop OUTSIDE the pcall, so one marker's failure can't leave
+  -- love.graphics's transform/color stack unbalanced for anything drawn
+  -- after it (TouchControls, or next frame) - this is screen-space code
+  -- I can't watch run, so it has to fail safely by construction, not by
+  -- hoping it doesn't fail.
+  local function displayMetrics()
+    local ww, wh = love.graphics.getDimensions()
+    local pw, ph = ww, wh
+    if love.graphics.getPixelDimensions then
+      pw, ph = love.graphics.getPixelDimensions()
+    end
+    local dpiX, dpiY = 1, 1
+    if ww > 0 and pw > 0 then dpiX = pw / ww end
+    if wh > 0 and ph > 0 then dpiY = ph / wh end
+    if (dpiX == 1 and dpiY == 1) and not love.graphics.getPixelDimensions
+       and love.graphics.getDPIScale then
+      local d = love.graphics.getDPIScale()
+      if d and d > 1e-6 then dpiX, dpiY = d, d end
+    end
+    if dpiX < 1e-6 then dpiX = 1 end
+    if dpiY < 1e-6 then dpiY = 1 end
+    return pw, ph, dpiX, dpiY
+  end
+
+  -- runs already inside love.graphics.push()/pop() from the caller - draws
+  -- in a local space where (0,0) is the label's own center point and one
+  -- unit is one native GB pixel, matching Font's own glyph metrics
+  local function drawOneLabel(screenX, screenY, sx, sy, name)
+    love.graphics.translate(screenX, screenY)
+    love.graphics.scale(sx, sy)
+    local w = Font.width(name)
+    -- same white-box/black-text nameplate every textbox/list in this
+    -- game already uses (see e.g. src/ui/ListMenu.lua's own draw()) -
+    -- guaranteed readable, and it's the game's own established look
+    -- rather than an invented style
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.rectangle("fill", -w / 2 - 1, -1, w + 2, 9)
+    love.graphics.setColor(0, 0, 0, 1)
+    Font.draw(name, -w / 2, 0)
+  end
+
+  local function drawNameLabels(g)
+    if not mod.world then return end
+    local ow = mod.world:overworld()
+    if not ow or not ow.camera or not Renderer.worldCanvas then return end
+    if not g or not g.stack or g.stack:top() ~= ow then return end
+    if Tilt.active() then return end
+
+    local pw, ph, dpiX, dpiY = displayMetrics()
+    local Sp = Renderer:fitScale()
+    local sp = Zoom.scale(Sp)
+    if not sp or sp <= 0 then return end
+    local sx, sy = sp / dpiX, sp / dpiY
+    local wvw, wvh = Renderer.worldCanvas:getWidth(), Renderer.worldCanvas:getHeight()
+    local wox = math.floor((pw - wvw * sp) / 2) / dpiX
+    local woy = math.floor((ph - wvh * sp) / 2) / dpiY
+
+    for id, m in pairs(remoteMarkers) do
+      if m.npcId then
+        -- reaches past Handle's documented surface (:scriptMove/:face/
+        -- :position() only) to .npc.px/.py - the live INTERPOLATED pixel
+        -- position mid-step, not just the destination cell :position()
+        -- would give, so the label doesn't jump ahead of a still-walking
+        -- sprite. Falls back to the cell position if that field is ever
+        -- gone (a hot-reload, an engine change) rather than erroring.
+        local handle = mod.world:npc(m.mapId, m.npcId)
+        local npc = handle and handle.npc
+        if npc then
+          local px = npc.px or (m.x * 16)
+          local py = npc.py or (m.y * 16)
+          -- +8 centers over the 16px-wide sprite; the sprite itself draws
+          -- 4px above its cell (SpriteRenderer:draw's own `- 4`) and the
+          -- label sits another 8px above that
+          local canvasX = px - ow.camera.x + 8
+          local canvasY = py - ow.camera.y - 4 - 8
+          local screenX = wox + canvasX * sx
+          local screenY = woy + canvasY * sy
+          local name = remoteNames[id] or PLAYER_LABELS[id] or "?"
+          love.graphics.push()
+          local ok, err = pcall(drawOneLabel, screenX, screenY, sx, sy, name)
+          love.graphics.pop()
+          if not ok then
+            mod.log:warn("name label draw failed for player %d: %s", id, tostring(err))
+          end
+        end
+      end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+  end
+
   showPlayerList = function()
     if not game then return end
     local items = {}
@@ -871,6 +1018,14 @@ return function(mod)
       receivePositions()
     end
     return next(g, dt)
+  end)
+
+  -- see drawNameLabels' own long comment for the geometry reasoning and
+  -- the safety rationale for the pcall/push/pop structure - `g` is
+  -- Game.lua's own `self`, needed for the g.stack:top() visibility check
+  mod.hooks:wrap("render.hud", function(next, g, viewport)
+    drawNameLabels(g)
+    return next(g, viewport)
   end)
 
   mod.events:on("game.ready", function(payload)

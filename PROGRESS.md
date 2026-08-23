@@ -10,6 +10,70 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.15 through v0.0.20 CONFIRMED WORKING in real play
+
+MrJoufflu, in passing while asking for the name-label feature below:
+"tout le reste fonctionne bien" (everything else works fine). Real
+confirmation, not just source-verified: connection/relay, real-sprite
+markers, MY NAME, MY SPRITE (including the local reskin), and the
+animated walk/facing all hold up in actual gameplay. Only the
+name-label feature below is new/unverified as of this entry.
+
+## v0.0.21: floating name labels over each marker - the v0.0.16 "no"
+
+MrJoufflu asked again: "panse tu qu'on peu mettre le nom des joueur au
+dessus de sprite?" I'd turned this down in v0.0.16 (see that entry) on
+the grounds that render.hud's viewport is letterbox-only geometry, not
+the world canvas's own screen placement, and that reaching further would
+mean reconstructing private renderer math with no stability guarantee
+and no way for me to verify it visually. Laid out that same reasoning
+again when asked, and MrJoufflu's response was "mais ca serais tellement
+wow" (but it'd be so cool) - not an explicit "accept the risk," but read
+as wanting the attempt anyway given the enthusiasm and this project's
+established pattern of trying things and getting real feedback rather
+than stopping to negotiate every risk in the abstract.
+
+What changed since v0.0.16 that made this worth attempting now: v0.0.20
+already opened the `engine_internals` door (for the local-sprite reskin),
+and on closer inspection the geometry needed - `Renderer:fitScale()`,
+`Zoom.scale()`, `Renderer.worldCanvas:getWidth/Height()` - turned out to
+be either real public methods or plain `love.graphics.*` calls
+(`displayMetrics()`'s own logic), NOT actually private renderer state the
+way I'd assumed. The one genuinely private piece,
+`Renderer:endFrame`'s internal `displayMetrics()` helper, is itself built
+entirely from stable, standard LÖVE window/DPI queries - safe to
+reimplement verbatim since it doesn't touch anything renderer-specific.
+
+- `drawNameLabels()` (wraps `render.hud`) reconstructs the world canvas's
+  screen placement by mirroring `Renderer:endFrame`'s own
+  `elseif self.worldActive then` branch math, then converts each visible
+  marker's live world-pixel position (`handle.npc.px/.py` - the
+  INTERPOLATED mid-step position, not just the destination cell, so the
+  label doesn't jump ahead of a still-walking sprite) into a screen
+  coordinate and draws a small white-box/black-text nameplate above it -
+  the same visual language every textbox/list in this game already uses
+  (`src/ui/ListMenu.lua`'s own draw()), not an invented style.
+- Two deliberate bail-outs rather than best-effort guesses: skip
+  entirely when the overworld isn't literally `game.stack:top()` (a menu
+  or battle covering it - `mod.world:overworld()` would still resolve
+  the world state underneath, which is right for `spawnNpc` but wrong
+  for "is this actually what's on screen"), and skip in `Tilt.active()`
+  mode (the ground is projected through a perspective shader mesh there,
+  not flat - this linear math would place labels wrong, not just
+  imprecisely).
+- Each label's draw runs inside its own `pcall`, with
+  `love.graphics.push()`/`pop()` kept OUTSIDE that pcall (bracketing it,
+  not inside it) - guarantees the graphics transform/color stack stays
+  balanced across frames even if one marker's draw throws, since this is
+  screen-space code I have no way to watch run myself. One marker
+  failing logs a warning and skips just that label rather than risking
+  visual corruption for everything drawn afterward that frame.
+- Genuinely the least-verified piece of this whole project: the pixel
+  offsets (`+8` centering, `-4` matching `SpriteRenderer:draw`'s own
+  above-cell offset, `-8` label gap) are read off the engine source, not
+  tuned against a real screenshot - expect this to need adjustment once
+  MrJoufflu actually sees it in game.
+
 ## v0.0.20: animated movement/facing, and MY SPRITE reskins yourself too
 
 Three asks from MrJoufflu, back to back, right after v0.0.19 shipped:

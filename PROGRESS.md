@@ -10,9 +10,16 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.2) built, awaiting real two-player test
+## Status: Step 1 (v0.0.3) built, awaiting real two-player test
 
-**Update (v0.0.2):** switched connection confirmation from log-only to an
+Still nothing confirmed working in an actual two-instance test as of
+v0.0.3 - MrJoufflu sent a screenshot after loading the game (v0.2.20,
+newer than the v0.1.75 this was researched against) but no textbox was
+visible in it, and it's not yet confirmed whether the mod was actually
+installed/configured at that point or whether this was just a "here's
+the game running" check-in.
+
+**v0.0.2:** switched connection confirmation from log-only to an
 in-game textbox. The dev console (`POKEPORT_DEV=1`) needs an env var set
 before launch, which isn't practical when testing across different
 devices/platforms (MrJoufflu is testing PC + phone) - a textbox needs
@@ -23,6 +30,15 @@ Pushing the textbox is deferred from `game.ready` to the first
 `world.stepped` after it, since `game.ready` can fire before the player
 is actually in control (title/save-select/intro) and pushing UI state
 then is untested.
+
+**v0.0.3:** found and fixed a real bug in the v0.0.2 design - every
+failure path (`require("socket")` failing, `config.lua` missing/invalid,
+an unrecognized `role`) returned early *before* `world.stepped` ever got
+subscribed, so a broken setup produced zero feedback at all - not even
+an error textbox - and would have looked indistinguishable from "the mod
+isn't installed." `game.ready`/`world.stepped` are now subscribed
+unconditionally first; every failure mode notifies through the same
+textbox queue as the success path.
 
 Nothing has been confirmed working in an actual two-instance test yet.
 Everything below is "should work based on source research" until MrJoufflu

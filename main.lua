@@ -10,6 +10,15 @@
 -- testing across different devices/platforms. A textbox needs nothing
 -- extra - if you see it, the connection worked.
 --
+-- v0.0.3: EVERY failure path now shows a textbox too (bad/missing
+-- config, no LuaSocket, bind/connect failure, wrong role). v0.0.2 only
+-- had feedback for the success path - if require("socket") failed or
+-- config.lua was missing, the mod returned early before ever
+-- registering world.stepped, so nothing ever showed up in-game and it
+-- looked like the mod just wasn't running at all. The event
+-- subscriptions are now registered unconditionally first; everything
+-- that can go wrong is checked inside them instead of before them.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - LAN/port-forward only, no relay server.
 -- - Polling only happens on world.stepped (the local player has to move
@@ -20,13 +29,15 @@
 -- - One peer only. No reconnect handling.
 -- - Whichever build you're on needs LuaSocket (require("socket")) to
 --   actually work - confirmed present on the Windows LOVE2D build. Not
---   verified on Switch/iOS/other builds.
+--   verified on Switch/iOS/other builds. No documented simple Android
+--   build for gen1recomp at all as of this writing.
 --
 -- Test plan: launch two gen1recomp instances with this mod installed,
 -- config.lua set to role="host" on one and role="client" (host_ip set to
--- the host's LAN IP) on the other. Walk around on the host's side after
--- launch (world.stepped only fires on movement) - a textbox should pop
--- up on both sides once the client connects.
+-- the host's LAN IP) on the other. Walk around on both sides after
+-- loading in (world.stepped only fires on movement) - a textbox should
+-- show SOMETHING on both sides within a step or two of loading in, even
+-- if it's just an error.
 
 return function(mod)
   local TextBox = require("src.render.TextBox")
@@ -48,41 +59,35 @@ return function(mod)
     pendingNotify = nil
   end
 
+  -- state: "idle" -> "listening" (host, waiting for a client) or
+  -- "connecting" (client) -> "connected" -> "error"
+  local state = "idle"
+  local master = nil -- host's listening socket
+  local peer = nil    -- the live connection to the other player, once up
+  local socket = nil  -- set once require("socket") is confirmed to work
+  local cfg = nil
 
   local function loadConfig()
     local body = mod:read("config.lua")
     if not body then
-      mod.log:warn("no config.lua found, doing nothing")
+      mod.log:warn("no config.lua found")
+      notify("Gen1Coop:\nconfig.lua\nintrouvable.")
       return nil
     end
     local chunk, err = loadstring(body, "config.lua")
     if not chunk then
       mod.log:warn("config.lua has a syntax error: %s", tostring(err))
+      notify("Gen1Coop:\nconfig.lua a\nune erreur de\nsyntaxe.")
       return nil
     end
-    local ok, cfg = pcall(chunk)
-    if not ok or type(cfg) ~= "table" then
-      mod.log:warn("config.lua did not return a table: %s", tostring(cfg))
+    local ok, result = pcall(chunk)
+    if not ok or type(result) ~= "table" then
+      mod.log:warn("config.lua did not return a table: %s", tostring(result))
+      notify("Gen1Coop:\nconfig.lua est\ninvalide.")
       return nil
     end
-    return cfg
+    return result
   end
-
-  local hasSocket, socket = pcall(require, "socket")
-  if not hasSocket then
-    mod.log:error("require('socket') failed - LuaSocket not available in this build")
-    return
-  end
-
-  local cfg = loadConfig()
-  if not cfg then return end
-
-  -- state: "idle" -> "listening" (host, waiting for a client) or
-  -- "connecting" (client) -> "connected" -> "error"
-  local state = "idle"
-  local master = nil   -- host's listening socket
-  local peer = nil      -- the live connection to the other player, once up
-  local recvBuffer = ""
 
   local function startHost()
     local s, err = socket.bind("*", cfg.port)
@@ -116,16 +121,30 @@ return function(mod)
     notify(("Gen1Coop:\nconnecte a\n%s!"):format(cfg.host_ip))
   end
 
-  mod.events:on("game.ready", function(payload)
-    game = payload and payload.game
+  -- everything that can go wrong lives in here, called from game.ready,
+  -- so there is always a textbox for it to reach (see the v0.0.3 note up
+  -- top for why this used to fail silently)
+  local function init()
+    local hasSocket, result = pcall(require, "socket")
+    if not hasSocket then
+      mod.log:error("require('socket') failed: %s", tostring(result))
+      notify("Gen1Coop:\nreseau (socket)\nindisponible\nsur ce build.")
+      return
+    end
+    socket = result
+
+    cfg = loadConfig()
+    if not cfg then return end
+
     if cfg.role == "host" then
       startHost()
     elseif cfg.role == "client" then
       startClient()
     else
       mod.log:warn("config.lua: role must be 'host' or 'client', got %s", tostring(cfg.role))
+      notify(("Gen1Coop:\nrole invalide\ndans config.lua:\n%s"):format(tostring(cfg.role)))
     end
-  end)
+  end
 
   -- non-blocking accept: keeps trying every step until a client shows up
   local function serviceHost()
@@ -155,7 +174,7 @@ return function(mod)
   local function receivePositions()
     if not peer then return end
     while true do
-      local line, err, partial = peer:receive("*l")
+      local line, err = peer:receive("*l")
       if line then
         local mapId, x, y = line:match("^(.-),(%-?%d+),(%-?%d+)$")
         if mapId then
@@ -172,9 +191,16 @@ return function(mod)
     end
   end
 
+  -- registered unconditionally, before any config/socket validation, so
+  -- a failure in init() still has somewhere to surface its notify()
+  mod.events:on("game.ready", function(payload)
+    game = payload and payload.game
+    init()
+  end)
+
   mod.events:on("world.stepped", function(payload)
     flushNotify()
-    if cfg.role == "host" then
+    if cfg and cfg.role == "host" then
       serviceHost()
     end
     if state == "connected" then

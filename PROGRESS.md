@@ -10,7 +10,13 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.3) built, awaiting real two-player test
+## Status: Step 1 (v0.0.4) built, awaiting real two-player test
+
+**v0.0.4:** added `"github": "git-mrjoufflu/gen1coop"` to manifest.json
+so gen1recomp's in-game mod manager can check for updates itself (same
+mechanism translation-qc uses) - no CI/release automation set up yet
+though, releases are still manual via `gh release create` while this is
+in rapid-iteration prototype mode.
 
 Still nothing confirmed working in an actual two-instance test as of
 v0.0.3 - MrJoufflu sent a screenshot after loading the game (v0.2.20,

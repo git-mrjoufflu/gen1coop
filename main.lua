@@ -170,15 +170,33 @@ return function(mod)
       notify(("Gen1Coop:\nconnexion a\n%s\nratee:\n%s"):format(ip, tostring(err)))
       return
     end
-    pendingConnect = { socket = s, ip = ip }
+    pendingConnect = { socket = s, ip = ip, startedAt = os.time() }
     state = "connecting"
     mod.log:info("connecting to %s:%d...", ip, PORT)
     notify(("Gen1Coop:\nconnexion a\n%s..."):format(ip))
   end
 
+  -- a connect() that never resolves (never becomes writable, success or
+  -- failure) usually means something outside this mod's control is
+  -- silently dropping the attempt - a firewall, or WiFi client/AP
+  -- isolation blocking device-to-device traffic on the same network.
+  -- Without this, "connecting" would just sit there forever with no
+  -- further feedback, same shape of problem as the old blocking connect.
+  local CONNECT_TIMEOUT_SECONDS = 10
+
   local function pollConnect()
     if not pendingConnect then return end
     local s = pendingConnect.socket
+    if os.time() - pendingConnect.startedAt > CONNECT_TIMEOUT_SECONDS then
+      mod.log:error("connect to %s:%d timed out after %ds - never became " ..
+        "writable, likely a firewall or WiFi client isolation silently " ..
+        "dropping it", pendingConnect.ip, PORT, CONNECT_TIMEOUT_SECONDS)
+      state = "error"
+      notify(("Gen1Coop:\n%s\nne repond pas.\nPare-feu ou\nisolation WiFi?"):format(pendingConnect.ip))
+      s:close()
+      pendingConnect = nil
+      return
+    end
     local _, writable = socket.select(nil, { s }, 0)
     if not writable or #writable == 0 then
       return -- still in progress, check again next step

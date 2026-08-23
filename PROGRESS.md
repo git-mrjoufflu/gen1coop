@@ -10,7 +10,32 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.9) built, awaiting real two-player test
+## Status: Step 1 (v0.0.10) built - likely network-level blocker found,
+not a mod bug
+
+**v0.0.10:** v0.0.9's non-blocking connect worked as designed - MrJoufflu
+saw "connexion a 192.168.2.65..." appear instantly (phone hosting, PC
+joining) - but it then sat there indefinitely, never resolving to either
+"connecte" or an error. A `connect()` that never becomes writable at all
+(not success, not failure) is the textbook symptom of something *outside*
+the app silently dropping the SYN - most likely candidates: Windows
+Firewall on the PC blocking the outbound attempt, or WiFi client/AP
+isolation on the router preventing devices from reaching each other on
+the same network at all (very common default on home routers' guest
+networks, and on some routers generally). This is very likely a network
+configuration issue, not a bug in this mod's code - but the mod had no
+way to surface that distinction, since `pendingConnect` had no timeout
+and would just poll forever in silence.
+
+Added a 10s timeout in `pollConnect()`: if a connect attempt never
+resolves, it now gives up and shows "Gen1Coop: [ip] ne repond pas.
+Pare-feu ou isolation WiFi?" - turning an indefinite silent hang into an
+actionable message. Next real step is a network-level diagnostic (does
+`ping 192.168.2.65` from the PC even succeed? is there an "AP isolation"
+/ "client isolation" setting in the router's admin panel? does Windows
+Firewall have an outbound rule for gen1recomp.exe?), not more mod code -
+if it's genuinely isolation/firewall, no amount of retrying from inside
+the mod will fix it.
 
 **v0.0.9 - two more issues from testing v0.0.8:** host's textbox showed
 "port en attente" with no IP (the `localIP()` UDP trick, or its

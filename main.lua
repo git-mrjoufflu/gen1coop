@@ -134,16 +134,21 @@ return function(mod)
     }, { title = "GEN1COOP" }))
   end
 
+  -- mod.hooks:wrap, not :on - the mod-facing method really is "wrap" (see
+  -- src/mods/Loader.lua: hooks = { wrap = function(_, name, callback, ...) }),
+  -- and the callback receives `next` first (src/mods/Hooks.lua:
+  -- pcall(entry.callback, nextFn, unpack(args))), same as any wrapper.
+  --
   -- scoped by title so this only swaps the grid for OUR naming screen,
   -- never the player's actual name-entry / nickname screens
-  mod.hooks:on("ui.naming.grid", function(base, ctx)
+  mod.hooks:wrap("ui.naming.grid", function(next, base, ctx)
     if ctx.title == NAMING_TITLE then return IP_GRID end
-    return base
+    return next(base, ctx)
   end)
 
-  mod.hooks:on("ui.start_menu.items", function(_, items)
+  mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
     items[#items + 1] = { label = "GEN1COOP", onSelect = openConnectMenu }
-    return items
+    return next(game, items)
   end)
 
   -- non-blocking accept: keeps trying every step until a client shows up

@@ -10,7 +10,25 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.6) built, awaiting real two-player test
+## Status: Step 1 (v0.0.7) built, awaiting real two-player test
+
+**v0.0.7 - real bug, caught by the mod manager's error screen:** v0.0.6
+crashed on load - `mods/gen1coop/main.lua:139: attempt to call method
+'on' (a nil value)`. `mod.hooks:on(...)` is not a real method; the actual
+mod-facing API is `mod.hooks:wrap(name, callback, priority)`
+(`src/mods/Loader.lua`: `hooks = { wrap = function(...) end }`), and the
+callback receives `next` as its *first* argument, same as any
+intercept/wrap pattern (`src/mods/Hooks.lua`:
+`pcall(entry.callback, nextFn, unpack(args))`). Fixed both hook
+registrations (`ui.naming.grid`, `ui.start_menu.items`) to use `:wrap`
+and the `(next, ...)` signature, calling `next(...)` to pass through
+instead of returning the base value directly.
+
+Notable: this exact wrong pattern (`mod.hooks:on("ui.naming.grid", ...)`)
+is also sitting in translation-qc's main.lua, unnoticed because it's
+gated behind `if grid.upper then` and `lang/naming.lua` ships an empty
+table by default - so it's dead code there, never actually executed.
+Worth fixing over there too if that mod ever gets a custom naming grid.
 
 **v0.0.6 - confirmed: sockets work on both PC and the official Android
 build.** MrJoufflu's screenshot after v0.0.5 showed "en attente sur le

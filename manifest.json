@@ -1,7 +1,7 @@
 {
   "id": "gen1coop",
   "name": "Gen1 Co-op (prototype)",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -11,5 +11,5 @@
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],
-  "description": "Experimental overworld co-op prototype. Two players connect over a direct TCP socket and see each other's position sync in the game log. No visible remote player yet - this is step 1: prove the connection works."
+  "description": "Experimental overworld co-op prototype. Two players connect over a direct TCP socket; connecting shows an in-game textbox on both sides, no separate console needed. No visible remote player yet - this is step 1: prove the connection works."
 }

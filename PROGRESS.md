@@ -10,7 +10,19 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 built, awaiting real two-player test
+## Status: Step 1 (v0.0.2) built, awaiting real two-player test
+
+**Update (v0.0.2):** switched connection confirmation from log-only to an
+in-game textbox. The dev console (`POKEPORT_DEV=1`) needs an env var set
+before launch, which isn't practical when testing across different
+devices/platforms (MrJoufflu is testing PC + phone) - a textbox needs
+nothing extra. Also found: gen1recomp has no documented simple Android
+build (only Windows/Switch/iOS-via-Xcode-rebuild) - if "phone" means
+Android, that needs sorting out before a phone test can work at all.
+Pushing the textbox is deferred from `game.ready` to the first
+`world.stepped` after it, since `game.ready` can fire before the player
+is actually in control (title/save-select/intro) and pushing UI state
+then is untested.
 
 Nothing has been confirmed working in an actual two-instance test yet.
 Everything below is "should work based on source research" until MrJoufflu

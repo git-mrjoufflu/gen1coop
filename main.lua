@@ -1,8 +1,14 @@
 -- Gen1 Co-op prototype, step 1: prove two gen1recomp instances can talk
 -- to each other at all. No visible remote player yet - this just opens a
 -- direct TCP connection (LuaSocket, bundled in love.dll on every LOVE2D
--- build, no extra install needed) and logs the peer's position every
--- time either side takes a step.
+-- build, no extra install needed) and shows an in-game textbox when the
+-- connection is made, then logs the peer's position every time either
+-- side takes a step.
+--
+-- Confirmation is a textbox, not just a log line, on purpose: the dev
+-- console needs an env var set before launch, which isn't practical when
+-- testing across different devices/platforms. A textbox needs nothing
+-- extra - if you see it, the connection worked.
 --
 -- Known rough edges, on purpose for a first slice:
 -- - LAN/port-forward only, no relay server.
@@ -12,14 +18,37 @@
 --   passthrough is wrong - not worth that risk before the basic
 --   connection is even proven to work.
 -- - One peer only. No reconnect handling.
+-- - Whichever build you're on needs LuaSocket (require("socket")) to
+--   actually work - confirmed present on the Windows LOVE2D build. Not
+--   verified on Switch/iOS/other builds.
 --
 -- Test plan: launch two gen1recomp instances with this mod installed,
 -- config.lua set to role="host" on one and role="client" (host_ip set to
--- the host's LAN IP) on the other. Walk around in both. Open the dev
--- console (POKEPORT_DEV=1 env var, then backtick in-game) to watch
--- mod.log output, or just check the terminal if one is attached.
+-- the host's LAN IP) on the other. Walk around on the host's side after
+-- launch (world.stepped only fires on movement) - a textbox should pop
+-- up on both sides once the client connects.
 
 return function(mod)
+  local TextBox = require("src.render.TextBox")
+  local game = nil -- captured from game.ready; needed to push a textbox
+  local pendingNotify = nil
+
+  -- game.ready can fire before the player is actually in control (title
+  -- screen, save select, intro) - pushing a textbox right then is
+  -- untested territory, so notify() just queues the message and
+  -- world.stepped (which only ever fires once real overworld movement is
+  -- happening) is what actually shows it.
+  local function notify(text)
+    pendingNotify = text
+  end
+
+  local function flushNotify()
+    if not pendingNotify or not game or not game.stack then return end
+    game.stack:push(TextBox.new(game, pendingNotify, function() end))
+    pendingNotify = nil
+  end
+
+
   local function loadConfig()
     local body = mod:read("config.lua")
     if not body then
@@ -60,12 +89,14 @@ return function(mod)
     if not s then
       mod.log:error("host bind on port %d failed: %s", cfg.port, tostring(err))
       state = "error"
+      notify(("Erreur: port\n%d pris ou\nbloque."):format(cfg.port))
       return
     end
     s:settimeout(0)
     master = s
     state = "listening"
     mod.log:info("hosting on port %d, waiting for a player to join...", cfg.port)
+    notify(("Gen1Coop: en\nattente sur le\nport %d..."):format(cfg.port))
   end
 
   local function startClient()
@@ -75,15 +106,18 @@ return function(mod)
     if not ok then
       mod.log:error("could not connect to %s:%d - %s", cfg.host_ip, cfg.port, tostring(err))
       state = "error"
+      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(cfg.host_ip))
       return
     end
     s:settimeout(0) -- non-blocking from here on
     peer = s
     state = "connected"
     mod.log:info("connected to host %s:%d", cfg.host_ip, cfg.port)
+    notify(("Gen1Coop:\nconnecte a\n%s!"):format(cfg.host_ip))
   end
 
-  mod.events:on("game.ready", function()
+  mod.events:on("game.ready", function(payload)
+    game = payload and payload.game
     if cfg.role == "host" then
       startHost()
     elseif cfg.role == "client" then
@@ -102,6 +136,7 @@ return function(mod)
       peer = s
       state = "connected"
       mod.log:info("player joined!")
+      notify("Gen1Coop:\nun joueur s'est\nconnecte!")
     end
   end
 
@@ -113,6 +148,7 @@ return function(mod)
       mod.log:warn("send failed: %s - peer likely disconnected", tostring(err))
       peer = nil
       state = "error"
+      notify("Gen1Coop:\nconnexion perdue.")
     end
   end
 
@@ -137,6 +173,7 @@ return function(mod)
   end
 
   mod.events:on("world.stepped", function(payload)
+    flushNotify()
     if cfg.role == "host" then
       serviceHost()
     end

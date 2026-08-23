@@ -281,22 +281,31 @@ return function(mod)
     game.stack:push(Menu.new(game, {
       { label = "HOST", onSelect = function() startHost() end },
       { label = "JOIN", onSelect = function()
-          game.stack:push(NamingScreen.new(game, {
-            title = NAMING_TITLE,
-            maxLen = 15,
-            default = mod.save:get("last_address", ""),
-            onDone = function(ip, confirmed)
-              mod.log:info("naming onDone: ip=%s confirmed=%s", tostring(ip), tostring(confirmed))
-              if not confirmed then
-                return -- B/cancel - no message, this is a normal back-out
-              end
-              if ip == "" then
-                notify("Gen1Coop:\nIP vide,\nressaie.")
-                return
-              end
-              startClient(ip)
-            end,
-          }))
+          notify("Gen1Coop:\nouverture du\nclavier...")
+          local ok, err = pcall(function()
+            game.stack:push(NamingScreen.new(game, {
+              title = NAMING_TITLE,
+              maxLen = 15,
+              default = mod.save:get("last_address", ""),
+              onDone = function(ip, confirmed)
+                notify(("Gen1Coop:\nonDone recu\nip=%s\nconfirme=%s"):format(
+                  wrapAddress(tostring(ip)), tostring(confirmed)))
+                mod.log:info("naming onDone: ip=%s confirmed=%s", tostring(ip), tostring(confirmed))
+                if not confirmed then
+                  return -- B/cancel - normal back-out
+                end
+                if ip == "" then
+                  notify("Gen1Coop:\nIP vide,\nressaie.")
+                  return
+                end
+                startClient(ip)
+              end,
+            }))
+          end)
+          if not ok then
+            mod.log:error("failed to open naming screen: %s", tostring(err))
+            notify(("Gen1Coop:\nerreur clavier:\n%s"):format(wrapAddress(tostring(err))))
+          end
         end },
     }, { title = "GEN1COOP" }))
   end

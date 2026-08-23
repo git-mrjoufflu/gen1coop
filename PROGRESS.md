@@ -76,6 +76,49 @@ paths, not yet decided between:
 **MrJoufflu picked option 2 (relay server) directly**, skipping the
 port-forwarding stopgap - built in v0.0.12.
 
+## MrJoufflu paused internet play to focus on LAN first
+
+Reasonable call - LAN (>2 players) hadn't been confirmed yet, and now
+neither had the relay. Suggested running two gen1recomp installs on one
+PC (separate folders, separate saves) to simulate a 3rd player without
+needing 3 physical devices, to actually test the v0.0.11 relay logic.
+
+## v0.0.13: JOIN produced no feedback at all after v0.0.12 - still open
+
+Tried the 2-PC-copies + phone test. On BOTH joining devices (a PC copy
+and the phone), typing an address and pressing ED did nothing - no
+"connexion a..." textbox, no 10s timeout error, nothing. That's a real
+regression: even a failing connect should show *something* immediately
+via `notify()`, so this points to the naming screen's confirm never
+actually reaching `startClient()` at all, not a network problem.
+
+Read through `NamingScreen:update()`'s actual cell-selection code
+(hadn't verified this before, only `findMeta()` and `confirm()`):
+confirm triggers on `self.row == edRow and self.col == edCol` when A is
+pressed, both freshly computed from `findMeta(self:grid())` every frame
+- structurally this should work with `ADDRESS_GRID`'s shape (checked
+row widths, the case-switch row, "ED" placement) and no bug was found
+by inspection alone.
+
+Rather than keep guessing blind, added three diagnostic checkpoints
+instead of more speculative fixes:
+1. A textbox the instant JOIN is selected ("ouverture du clavier...") -
+   confirms the menu path itself still works.
+2. The `NamingScreen.new`+push call is now wrapped in `pcall` - if
+   something in `ADDRESS_GRID` or the naming screen itself throws, it
+   now shows as "erreur clavier: [message]" instead of failing silently
+   (a load-time error in main.lua shows as a big FAILED screen in the
+   mod manager, per v0.0.6's crash - but this would be a *runtime* error
+   during play, which might not surface anywhere without this).
+3. `onDone`'s notify now fires unconditionally, even for a cancelled
+   (`confirmed=false`) result, showing exactly what was received.
+
+Whichever of these three does or doesn't show up next test narrows this
+down a lot: nothing at all means the menu itself broke; "erreur
+clavier" means the grid/screen construction is the problem; "onDone
+recu" appearing (or not) settles whether confirm is reaching this mod's
+code at all. Not yet retested.
+
 ## v0.0.12: relay server for internet play, not yet tested with real people
 
 - `relay_server.py` (new file, standalone Python, NOT part of the

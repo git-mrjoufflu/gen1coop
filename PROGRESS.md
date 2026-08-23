@@ -10,6 +10,69 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.20: animated movement/facing, and MY SPRITE reskins yourself too
+
+Three asks from MrJoufflu, back to back, right after v0.0.19 shipped:
+"ok maintenant faut ajuster les sprite selon la direction et quand on
+change le choix de sprite est-ce que notre perso de notre cote peux
+change de sprite aussi" (adjust the sprite by direction, and can
+changing MY SPRITE also change our own character's sprite), then
+mid-implementation "si on peux avoir aussi les mouvement de jambe des
+autres joureurs" (leg movement/walk animation for other players too).
+
+**Direction + walk animation, together.** Redesigned `updateMarker` to
+stop despawning/respawning on every position update. When the new
+position is a legit single-tile step from a marker's last known
+position, on the same map, with a live NPC already spawned there
+(`directionOf` + the new `remoteFacing` table), it now calls
+`mod.world:npc(mapId, npcId):scriptMove(dir, 1)` instead of respawning.
+Traced this all the way through `src/world/OverworldController.lua`'s
+`scriptMove`/`updateScriptMoves`: queuing a move sets `e.facing = dir`,
+computes the target cell, and sets `e.moving = true` - and
+`src/world/NPC.lua`'s `NPC:update` gates its ENTIRE moving-animation
+path (pixel interpolation + `walkPhase()`'s frame-0/1 alternation) on
+`self.moving` alone, completely independent of `self.wanders` (that
+only gates the separate autonomous-roaming branch). So a stationary,
+non-wandering marker NPC still gets the real walk-cycle frames and
+smooth per-pixel movement the moment something scripts it to move - both
+asks solved by the same one engine mechanism, no custom animation code
+needed at all. Falls back to a snap despawn/respawn (`snapMarker`, kept
+as its own function) for a first sighting on a map, a same-map jump
+bigger than one tile (a warp), or if the live handle is ever
+unexpectedly gone - `directionOf` only returns a direction for an exact
+adjacent-tile delta, so anything else routes to the safe snap path
+instead of trying to animate an illegal move. `remoteFacing[id]` persists
+the last known direction across a full despawn/respawn too, so even a
+snap now spawns facing the right way instead of resetting to down.
+One known open risk, not yet an issue in practice: if position updates
+ever arrived faster than a 16-frame walk-cycle plays out, queued
+`scriptMove`s would back up and the visual marker would lag behind the
+reported position - shouldn't happen under normal play since updates are
+paced by the sender's own step cadence (same speed the animation takes),
+but worth watching for once this is tested with real lag/jitter.
+
+**MY SPRITE now reskins the local player too.** `WorldAPI` doesn't
+expose a method for changing the player's OWN live sprite - its own file
+header is explicit that reaching into `OverworldState` internals beyond
+what it offers is unsupported. Weighed this the same way as the
+render.hud non-decision (v0.0.16): is there a real door, or none at all?
+Here there IS one, just gated: `src/mods/Loader.lua`'s `scanRequire`
+warns (`Logger.warn`, not a hard block) on any `require("src.*")` outside
+a small whitelist unless the mod declares `"engine_internals"` - and this
+mod's `src.ui.Menu`/`src.ui.NamingScreen`/etc. requires had already been
+triggering that warning, unlabeled, since v0.0.6. So: declared
+`"engine_internals"` in manifest.json (being honest about a debt that
+already existed, not just the new reach), and `applyLocalSprite()` now
+builds a fresh `SpriteRenderer.new(game.data.sprites[chosenId], "player")`
+and assigns it straight to the live `Player` object's `.sprite` field -
+the exact same construction `src/world/Player.lua` itself uses at boot.
+Confirmed via `Player:pose()` that it reads `self.sprite` fresh every
+call, no external cache keyed by the old instance to go stale. Runs
+immediately from MY SPRITE's own picker, and again every `map.entered`
+(covers a saved-but-not-yet-applied choice at session start, and
+re-asserts it defensively on every later map load).
+Not yet tested in a real game - everything here is source-verified only.
+
 ## v0.0.19: players pick their own sprite (MY SPRITE), saved
 
 MrJoufflu, right after v0.0.18 shipped real ROM sprites but still

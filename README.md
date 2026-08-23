@@ -104,12 +104,14 @@ still running and you copied the address correctly.
 
 - Other players show up using real overworld sprites from the game
   itself (Red for the host, the rival, and a handful of common trainer
-  NPCs for everyone else) rather than a custom-drawn marker - but it's a
-  static NPC, not a real second character: it always faces down and
-  teleports to each update instead of walking smoothly. Their name only
-  shows in the **PLAYERS** list, not floating over their marker in the
-  world (the engine doesn't expose the world-camera geometry mods would
-  need to place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
+  NPCs for everyone else, or whatever they picked via **MY SPRITE**),
+  walking with real animation and facing the direction they're actually
+  moving - not just a static marker. A position update that isn't a
+  normal single-tile step (a warp, or first spotting someone on a map)
+  still snaps instead of animating. Their name only shows in the
+  **PLAYERS** list, not floating over their marker in the world (the
+  engine doesn't expose the world-camera geometry mods would need to
+  place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
 - Fixed default port (51820) for LAN hosting, not configurable in-game
   (yet). Relay addresses can use any port, since they're typed in full.
 - LAN star topology: if the host quits, everyone's connection drops (the
@@ -130,7 +132,5 @@ still running and you copied the address correctly.
 
 ## Next steps (not built yet)
 
-Smooth marker movement (interpolation instead of teleporting between
-updates) and facing direction; internet/relay play confirmed with real
-people (still only LAN-tested); more than 2-3 simultaneous players
-confirmed.
+Internet/relay play confirmed with real people (still only LAN-tested);
+more than 2-3 simultaneous players confirmed.

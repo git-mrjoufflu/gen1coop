@@ -91,21 +91,45 @@
 -- version, corruption) falls back to that player's id-based default
 -- sprite instead of risking an uncaught error mid-relay.
 --
+-- v0.0.20: two asks together - "faut ajuster les sprite selon la
+-- direction" + "si on peux avoir aussi les mouvement de jambe des autres
+-- joureurs" (face the right direction, and walk-cycle their legs too),
+-- and "quand on change le choix de sprite est-ce que notre perso de
+-- notre cote peux change de sprite aussi" (does picking MY SPRITE change
+-- OUR OWN character too).
+--
+-- Markers no longer despawn/respawn on every update. A same-map,
+-- single-tile step now animates via WorldAPI's Handle:scriptMove
+-- (updateMarker/snapMarker/directionOf) instead of teleporting - that
+-- gets real walk-cycle frames, smooth pixel movement AND facing all at
+-- once, for free: NPC:update (src/world/NPC.lua) only gates its
+-- self.moving animation path on self.moving itself, not on self.wanders,
+-- so a stationary NPC still walks when scripted to move. remoteFacing
+-- tracks each player's last known direction so a snap respawn (first
+-- sighting on a map, a warp, a lost handle) still spawns facing the
+-- right way instead of resetting to down.
+--
+-- MY SPRITE now also reskins the LOCAL player's own on-screen character,
+-- not just what other players see - see applyLocalSprite()'s comment for
+-- why that needed reaching past WorldAPI (no method for it there) into
+-- the live Player object directly, declared via the new
+-- "engine_internals" permission.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
 -- - Needs the "network" permission (declared in manifest.json) - mods
---   run in a real sandbox (src/mods/Sandbox.lua) that denies
---   require("socket") without it.
--- - Markers teleport to each update rather than walking smoothly (no
---   interpolation yet), and always face down (no direction inference
---   from movement yet either).
+--   run in a real sandbox that denies require("socket") without it.
 
 return function(mod)
   local TextBox = require("src.render.TextBox")
   local Menu = require("src.ui.Menu")
   local ListMenu = require("src.ui.ListMenu")
   local NamingScreen = require("src.ui.NamingScreen")
+  -- for applyLocalSprite() below - the one other engine-internals
+  -- dependency in this mod besides raw sockets, see that function's
+  -- comment for why there's no sanctioned alternative
+  local SpriteRenderer = require("src.render.SpriteRenderer")
 
   local PORT = 51820
   -- accepts a plain LAN IP or a "host:port" relay address - kept short,
@@ -220,6 +244,33 @@ return function(mod)
   local function notify(text)
     if not game or not game.stack then return end
     game.stack:push(TextBox.new(game, text, function() end))
+  end
+
+  -- MY SPRITE controls what OTHER players see (via the wire protocol),
+  -- but MrJoufflu also wants it to change what the LOCAL player looks
+  -- like on their own screen. There's no WorldAPI method for that -
+  -- src/world/WorldAPI.lua's own header says "Reaching into OverworldState
+  -- internals stays unsupported; anything a mod legitimately needs
+  -- belongs here", and there's no belongs-here entry for the player's
+  -- own sprite - so this reaches directly into the live Player object,
+  -- the same way Player.lua itself builds one
+  -- (`SpriteRenderer.new(data.sprites[walkId], "player")`,
+  -- src/world/Player.lua). Declared via the "engine_internals" permission
+  -- (manifest.json) rather than done quietly - the engine's own
+  -- undeclared-require warning (src/mods/Loader.lua's scanRequire) exists
+  -- exactly to flag this kind of reach, and every src.ui.*/src.render.*
+  -- require this mod already made since v0.0.6 was already triggering it
+  -- unlabeled. Low blast radius: only replaces what the LOCAL player's
+  -- OWN overworld sprite renders as (confirmed via Player:pose() reading
+  -- self.sprite fresh - no external cache keyed by the old instance to
+  -- go stale), nothing shared or saved to disk.
+  local function applyLocalSprite()
+    local ow = mod.world and mod.world:overworld()
+    local player = ow and ow.player
+    if not player or not game or not game.data then return end
+    local spriteDef = game.data.sprites[localSprite()]
+    if not spriteDef then return end
+    player.sprite = SpriteRenderer.new(spriteDef, "player")
   end
 
   -- state: "idle" -> "listening" (host, waiting for players) or
@@ -471,6 +522,7 @@ return function(mod)
           game.stack:push(ListMenu.new(game, "MY SPRITE", items, {
             onChoose = function(item, menu)
               mod.save:set("player_sprite", item.value)
+              applyLocalSprite()
               notify(("Gen1Coop:\nyour sprite:\n%s"):format(item.label))
               menu:close()
             end,
@@ -516,6 +568,35 @@ return function(mod)
   -- (the id-based default) wherever it's still unknown.
   local remoteSprites = {}
 
+  -- remotePlayerId -> last known facing ("down"/"up"/"left"/"right",
+  -- lowercase - Handle:scriptMove/:face's casing, NOT spawnNpc's range
+  -- field, which wants uppercase - see spawnFacing below). Kept across a
+  -- full despawn/respawn (map change, reconnect) so a marker doesn't
+  -- reset to facing down every time it reappears; defaults to "down"
+  -- (matching the old always-down behavior) until a real step is seen.
+  local remoteFacing = {}
+
+  -- "down" -> "DOWN" for spawnNpc's objDef.range (FACING_FROM_RANGE in
+  -- src/world/NPC.lua expects the uppercase cardinal names, unlike
+  -- Handle:scriptMove/:face which take the lowercase self.facing values
+  -- directly - confirmed both casings via tests/mod_world_tests.lua)
+  local function spawnFacing(id)
+    return (remoteFacing[id] or "down"):upper()
+  end
+
+  -- single-tile cardinal step only (dx/dy is a real player step reported
+  -- over the wire, always exactly one tile) - anything else (0, >1,
+  -- diagonal) isn't a legal scriptMove target and the caller should snap
+  -- instead of trying to animate it
+  local function directionOf(fromX, fromY, toX, toY)
+    local dx, dy = toX - fromX, toY - fromY
+    if dx == 1 and dy == 0 then return "right" end
+    if dx == -1 and dy == 0 then return "left" end
+    if dx == 0 and dy == 1 then return "down" end
+    if dx == 0 and dy == -1 then return "up" end
+    return nil
+  end
+
   local function localMapId()
     local cur = mod.world and mod.world:current()
     return cur and cur.mapId
@@ -531,28 +612,18 @@ return function(mod)
     end
   end
 
-  -- called on every position update for player `id`, and again from the
-  -- map.entered resync below. Always despawns and (if the player is on
-  -- the local player's current map) respawns fresh, rather than trying
-  -- to move an existing NPC - WorldAPI's Handle only offers scripted
-  -- step-by-step movement (scriptMove), not a direct teleport-to-position,
-  -- and a respawn-per-update is simplest for a first pass. Means markers
-  -- pop between positions instead of walking smoothly - known, fine for
-  -- proving this works at all.
-  local function updateMarker(id, mapId, x, y, name, sprite)
-    if name and name ~= "" then remoteNames[id] = name end
-    if isValidSprite(sprite) then remoteSprites[id] = sprite end
-    local m = remoteMarkers[id]
-    if not m then
-      m = {}
-      remoteMarkers[id] = m
-    end
-    m.mapId, m.x, m.y = mapId, x, y
+  -- fresh despawn+respawn at (x,y) facing spawnFacing(id) - used for a
+  -- player's first appearance on this map, a teleport/warp (a jump that
+  -- isn't a single adjacent step), or if the live NPC handle is
+  -- otherwise unavailable. A snap, not an animated walk.
+  local function snapMarker(id, mapId, x, y)
     clearMarker(id)
     if not mod.world or mapId ~= localMapId() then return end
     local npcId, err = mod.world:spawnNpc(mapId, {
       sprite = remoteSprites[id] or spriteIdFor(id), x = x, y = y,
+      range = spawnFacing(id),
     })
+    local m = remoteMarkers[id]
     if npcId then
       m.npcId = npcId
     else
@@ -560,29 +631,62 @@ return function(mod)
     end
   end
 
+  -- called on every position update for player `id`, and again from the
+  -- map.entered resync below. When the update is a legit single-tile
+  -- step from the marker's last known position on the SAME map, animates
+  -- it there with Handle:scriptMove (real walk-cycle frames, smooth
+  -- pixel movement AND facing, all for free from NPC:update's existing
+  -- self.moving path - see src/world/NPC.lua, gated only on self.moving,
+  -- not on self.wanders, so a stationary/non-wandering NPC still walks
+  -- when scripted to). Otherwise (first sighting on this map, a warp, a
+  -- lost handle) falls back to snapMarker.
+  local function updateMarker(id, mapId, x, y, name, sprite)
+    if name and name ~= "" then remoteNames[id] = name end
+    if isValidSprite(sprite) then remoteSprites[id] = sprite end
+    local m = remoteMarkers[id]
+    local sameMap = m and m.mapId == mapId
+    local dir = sameMap and directionOf(m.x, m.y, x, y) or nil
+    if dir then remoteFacing[id] = dir end
+    if not m then
+      m = {}
+      remoteMarkers[id] = m
+    end
+    local hadNpc = m.npcId
+    m.mapId, m.x, m.y = mapId, x, y
+    if not mod.world or mapId ~= localMapId() then
+      clearMarker(id)
+      return
+    end
+    if sameMap and dir and hadNpc then
+      local handle = mod.world:npc(mapId, hadNpc)
+      if handle then
+        handle:scriptMove(dir, 1)
+        return
+      end
+      -- handle vanished somehow - fall through to a snap respawn
+    end
+    snapMarker(id, mapId, x, y)
+  end
+
   local function removeMarker(id)
     clearMarker(id)
     remoteMarkers[id] = nil
     remoteNames[id] = nil
     remoteSprites[id] = nil
+    remoteFacing[id] = nil
   end
 
   -- local player changed maps: every tracked player's marker needs to
   -- either appear (they were already on the new map, just not visible
-  -- before) or disappear (they're on whatever map was just left)
+  -- before) or disappear (they're on whatever map was just left). Always
+  -- a snap (never an animated move) - this is the LOCAL player's own map
+  -- change, not a remote player taking a step.
   local function resyncMarkers()
     if not mod.world then return end
     for id, m in pairs(remoteMarkers) do
       clearMarker(id)
       if m.mapId == localMapId() then
-        local npcId, err = mod.world:spawnNpc(m.mapId, {
-          sprite = remoteSprites[id] or spriteIdFor(id), x = m.x, y = m.y,
-        })
-        if npcId then
-          m.npcId = npcId
-        else
-          mod.log:warn("spawnNpc (resync) for player %d failed: %s", id, tostring(err))
-        end
+        snapMarker(id, m.mapId, m.x, m.y)
       end
     end
   end
@@ -775,9 +879,16 @@ return function(mod)
 
   -- local player warped/walked onto a new map: every tracked remote
   -- player's marker needs to be re-evaluated against the new map, not
-  -- just wait for that player's own next position update
+  -- just wait for that player's own next position update. Also
+  -- (re-)applies the local player's own MY SPRITE choice here rather
+  -- than only from the menu - map.entered is the first point a live
+  -- Player object reliably exists (game.ready can fire before one does),
+  -- so this covers a saved-but-not-yet-applied choice at session start,
+  -- and re-asserts it on every later map load in case anything ever
+  -- rebuilds the Player object with the vanilla sprite in between.
   mod.events:on("map.entered", function()
     resyncMarkers()
+    applyLocalSprite()
   end)
 
 end

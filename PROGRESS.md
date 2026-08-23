@@ -10,7 +10,16 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## v0.0.15: step 2, visible player markers - not yet tested
+## Step 2 CONFIRMED WORKING (v0.0.15)
+
+MrJoufflu confirmed the colored marker actually shows up in a real test
+("wow ca fonctionne"). Both major milestones of this project are now
+verified in real gameplay, not just by reading source: the connection
+layer (v0.0.10/v0.0.14) and now a visible representation of another
+player (v0.0.15). Still open: >2 simultaneous players untested, smooth
+movement/facing direction not built, internet relay mode untested.
+
+## v0.0.15: step 2, visible player markers - build notes
 
 MrJoufflu asked for step 2 as soon as the input.step fix went out (before
 it was even retested): colored markers per player, plus a way to see

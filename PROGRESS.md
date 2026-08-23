@@ -76,6 +76,35 @@ paths, not yet decided between:
 **MrJoufflu picked option 2 (relay server) directly**, skipping the
 port-forwarding stopgap - built in v0.0.12.
 
+## v0.0.14: found the real cause - polling was gated on local movement
+
+MrJoufflu's next test result: the HOST showed "joueur 2 connecte!
+(2/9)" - real proof the TCP connections were actually succeeding - but
+the joining devices themselves never showed a confirmation. That
+narrowed it down completely: the connection genuinely works, this was
+purely a feedback-timing bug. `pollConnect()` (and `serviceHost()`,
+`receivePositions()`, the relay) were only ever invoked from
+`world.stepped`, which only fires when the *local* player takes a
+tile-step - a joining player who confirmed an address and then stood
+still would never see their own "connecte a ...!" even after the
+connection had completed on the wire, because nothing was ever polling
+for it.
+
+Fix: found `input.step` (`Game:step`, `src/core/Game.lua`) - fires every
+fixed step unconditionally, is the engine's own extension point for
+"tool mods" (autoplay, accessibility, input drivers), and its vanilla
+implementation is a bare no-op, so wrapping it via `mod.hooks:wrap`
+carries none of the rendering-corruption risk a render hook would (a
+risk that was the whole reason this was left on `world.stepped` for so
+long). Split the host-side relay into `hostBroadcastOwn()` (host's own
+position, tied to `world.stepped` - no point spamming an unchanged
+position every frame) and `hostReceiveAndRelay()` (draining/relaying
+peers' updates, now on `input.step` - needs to run continuously
+regardless of the host's own movement). Client-side `pollConnect()` and
+`receivePositions()` moved to `input.step` too; `sendPosition()` stays
+on `world.stepped` (bandwidth-conscious - no reason to send an unchanged
+position every frame either). Not yet retested.
+
 ## MrJoufflu paused internet play to focus on LAN first
 
 Reasonable call - LAN (>2 players) hadn't been confirmed yet, and now

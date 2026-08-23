@@ -343,20 +343,26 @@ return function(mod)
     end
   end
 
-  -- host only: sends the host's own position to every connected player
-  -- (tagged id 0), then for each player, drains whatever they sent and
-  -- relays it (tagged with THAT player's id) to every OTHER player.
   -- Wire format is asymmetric on purpose: a client's outgoing line is
   -- untagged ("mapId,x,y") since the host already knows who sent it from
   -- which socket the data arrived on; everything the host sends out is
   -- tagged ("id,mapId,x,y") since the receiving client needs to know
   -- whose position this is, and it could be the host's or any peer's.
-  local function hostRelay(payload)
+
+  -- host only, tied to the host's own movement (world.stepped): sends
+  -- the host's own position to every connected player, tagged id 0.
+  local function hostBroadcastOwn(payload)
     local hostLine = string.format("0,%s,%d,%d\n", tostring(payload.mapId), payload.x, payload.y)
     for _, p in ipairs(peers) do
       p.socket:send(hostLine) -- best-effort; a dead peer gets cleaned up below
     end
+  end
 
+  -- host only, runs every input.step (NOT gated on the host's own
+  -- movement - see the input.step wiring below for why that matters):
+  -- for each player, drains whatever they sent and relays it, tagged
+  -- with THAT player's id, to every OTHER player.
+  local function hostReceiveAndRelay()
     local dead = {}
     for i, p in ipairs(peers) do
       while true do
@@ -422,22 +428,43 @@ return function(mod)
     end
   end
 
-  mod.events:on("game.ready", function(payload)
-    game = payload and payload.game
-  end)
-
+  -- world.stepped only fires when the LOCAL player takes a tile-step, so
+  -- it's the right place for sending this player's own position (no
+  -- point spamming an unchanged position every frame) but the wrong
+  -- place for anything that needs to happen continuously regardless of
+  -- whether this specific player is currently moving - accepting new
+  -- players, detecting a completed connect, or relaying OTHER players'
+  -- updates promptly. Bug found in testing: a joining player who typed
+  -- an address and confirmed but then stood still never saw the
+  -- "connecte a ...!" textbox, even though the host's side confirmed the
+  -- TCP connection had actually succeeded - pollConnect() was only ever
+  -- being called from world.stepped, so it silently never ran until the
+  -- player happened to move. input.step (Game:step, src/core/Game.lua)
+  -- fires every fixed step unconditionally - it's the engine's own
+  -- "tool mod" extension point (autoplay/accessibility/input drivers),
+  -- vanilla is a bare no-op, so wrapping it here carries none of the
+  -- rendering risk a render hook would.
   mod.events:on("world.stepped", function(payload)
     if isHost then
-      serviceHost()
-      hostRelay(payload)
-      return
-    end
-    if state == "connecting" then
-      pollConnect()
-    end
-    if state == "connected" then
+      hostBroadcastOwn(payload)
+    elseif state == "connected" then
       sendPosition(payload)
+    end
+  end)
+
+  mod.hooks:wrap("input.step", function(next, g, dt)
+    if isHost then
+      serviceHost()
+      hostReceiveAndRelay()
+    elseif state == "connecting" then
+      pollConnect()
+    elseif state == "connected" then
       receivePositions()
     end
+    return next(g, dt)
+  end)
+
+  mod.events:on("game.ready", function(payload)
+    game = payload and payload.game
   end)
 end

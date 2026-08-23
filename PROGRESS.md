@@ -10,6 +10,48 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.19: players pick their own sprite (MY SPRITE), saved
+
+MrJoufflu, right after v0.0.18 shipped real ROM sprites but still
+assigned them automatically by connection order: "can we let's them
+shoose they sprite in the config tab" - then, mid-implementation, added
+"faudrait que ca ce sauveguarde aussi question de ne pas le refaire a
+chaque fois" (it should save too, so it doesn't have to be redone every
+time) - confirming the obvious design (persist via `mod.save`, the exact
+mechanism MY NAME already uses) before it was even asked as a separate
+question.
+
+- START > GEN1COOP > MY SPRITE: a `ListMenu` of all ten
+  `PLAYER_SPRITES` entries (by their `PLAYER_LABELS` name). Picking one
+  saves it to `mod.save` under `player_sprite` and closes back to
+  GEN1COOP - same shape as MY NAME's flow.
+- `localSprite()` reads it back, defaulting to `SPRITE_RED` (id 0's
+  sprite - same "everyone starts identical until they customize"
+  default MY NAME already has) if nothing's been picked yet.
+- Wire protocol grows another trailing field (after name): now
+  `mapId,x,y,name,sprite` client->host and `id,mapId,x,y,name,sprite`
+  host->client. `remoteSprites[id]` (new table, same lifecycle as
+  `remoteNames`) tracks what sprite each remote player last reported;
+  `updateMarker`/`resyncMarkers` now spawn with `remoteSprites[id] or`
+  the id-based default instead of always the id-based default.
+- Added `isValidSprite()`, checked before ever trusting a received
+  sprite id: `NPC.new` (`src/world/NPC.lua`) does
+  `assert(data.sprites[objDef.sprite], ...)` on spawn - an *uncaught*
+  Lua error, unlike `spawnNpc`'s other failure modes (an unknown mapId
+  returns `nil, "unknown map"` gracefully instead). Nothing in this
+  mod's own UI can produce an invalid sprite id today (the MY SPRITE
+  list only ever offers the ten known ones), but the wire format trusts
+  whatever a peer sends, and there's no version negotiation anywhere in
+  this protocol - so a future version of this mod with more sprite
+  choices, or a corrupted line, must not be able to throw mid-relay.
+  Falls back to that player's id-based default sprite when the received
+  value isn't recognized.
+- JOUEURS/PLAYERS list fallback label (shown when a player hasn't set a
+  name) now reflects their actual current sprite choice
+  (`SPRITE_LABEL_BY_ID`, the reverse of `PLAYER_SPRITES`/`PLAYER_LABELS`)
+  instead of always the id-based default.
+- Not yet tested in a real game.
+
 ## v0.0.18: real ROM sprites instead of invented pixel art
 
 MrJoufflu's ask: "je veux les les meme sprite que l'original pas un

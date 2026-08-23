@@ -77,6 +77,20 @@
 -- mod.content.sprites:register needed at all - data.sprites already has
 -- these seeded by RomExtractor at import time, same as any vanilla NPC.
 --
+-- v0.0.19: START > GEN1COOP > MY SPRITE lets each player pick which of
+-- the ten PLAYER_SPRITES ids they show up as, instead of it being fixed
+-- by connection order. Persisted via mod.save (same as MY NAME) so it's
+-- a one-time pick, not something to redo every session. Wire format
+-- grew a trailing ",sprite" field (after name) on every position update
+-- so the choice reaches other players - see hostBroadcastOwn/
+-- sendPosition/hostReceiveAndRelay/receivePositions. A received sprite
+-- id is validated against PLAYER_SPRITES (isValidSprite) before ever
+-- reaching spawnNpc: NPC.new (src/world/NPC.lua) asserts on an unknown
+-- sprite id instead of returning a graceful error like spawnNpc's other
+-- failure modes do, so an unrecognized id (protocol drift, a future mod
+-- version, corruption) falls back to that player's id-based default
+-- sprite instead of risking an uncaught error mid-relay.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -135,6 +149,28 @@ return function(mod)
 
   local function spriteIdFor(playerId)
     return PLAYER_SPRITES[playerId]
+  end
+
+  -- reverse lookup (sprite id -> short label) for showing what sprite a
+  -- REMOTE player is currently using, once their choice is known
+  local SPRITE_LABEL_BY_ID = {}
+  for id = 0, 9 do SPRITE_LABEL_BY_ID[PLAYER_SPRITES[id]] = PLAYER_LABELS[id] end
+
+  -- only accept a sprite id a client actually offered on MY SPRITE - NPC.new
+  -- (src/world/NPC.lua) does `assert(data.sprites[objDef.sprite], ...)`,
+  -- an uncaught error, not a graceful nil/err return like spawnNpc's other
+  -- failure modes (unknown mapId IS handled gracefully there). A stray or
+  -- future-version sprite id from a peer must not be able to throw here.
+  local function isValidSprite(id)
+    return SPRITE_LABEL_BY_ID[id] ~= nil
+  end
+
+  -- persisted like player_name: set once via MY SPRITE, remembered after.
+  -- Defaults to SPRITE_RED (id 0's sprite) - same "everyone starts the
+  -- same until they customize" default MY NAME already uses.
+  local function localSprite()
+    local saved = mod.save:get("player_sprite", PLAYER_SPRITES[0])
+    return isValidSprite(saved) and saved or PLAYER_SPRITES[0]
   end
 
   -- keypad grid for the JOIN screen - covers both a plain LAN IP
@@ -427,6 +463,20 @@ return function(mod)
             end,
           }))
         end },
+      { label = "MY SPRITE", onSelect = function()
+          local items = {}
+          for id = 0, 9 do
+            items[#items + 1] = { label = PLAYER_LABELS[id], value = PLAYER_SPRITES[id] }
+          end
+          game.stack:push(ListMenu.new(game, "MY SPRITE", items, {
+            onChoose = function(item, menu)
+              mod.save:set("player_sprite", item.value)
+              notify(("Gen1Coop:\nyour sprite:\n%s"):format(item.label))
+              menu:close()
+            end,
+            onCancel = function() end,
+          }))
+        end },
     }, { title = "GEN1COOP" }))
   end
 
@@ -460,6 +510,12 @@ return function(mod)
   -- map (no npcId yet), e.g. for the JOUEURS list.
   local remoteNames = {}
 
+  -- remotePlayerId -> the sprite id they last sent (their MY SPRITE
+  -- choice), or nil until their first position update arrives - same
+  -- shape/lifecycle as remoteNames. Falls back to PLAYER_SPRITES[id]
+  -- (the id-based default) wherever it's still unknown.
+  local remoteSprites = {}
+
   local function localMapId()
     local cur = mod.world and mod.world:current()
     return cur and cur.mapId
@@ -483,8 +539,9 @@ return function(mod)
   -- and a respawn-per-update is simplest for a first pass. Means markers
   -- pop between positions instead of walking smoothly - known, fine for
   -- proving this works at all.
-  local function updateMarker(id, mapId, x, y, name)
+  local function updateMarker(id, mapId, x, y, name, sprite)
     if name and name ~= "" then remoteNames[id] = name end
+    if isValidSprite(sprite) then remoteSprites[id] = sprite end
     local m = remoteMarkers[id]
     if not m then
       m = {}
@@ -494,7 +551,7 @@ return function(mod)
     clearMarker(id)
     if not mod.world or mapId ~= localMapId() then return end
     local npcId, err = mod.world:spawnNpc(mapId, {
-      sprite = spriteIdFor(id), x = x, y = y,
+      sprite = remoteSprites[id] or spriteIdFor(id), x = x, y = y,
     })
     if npcId then
       m.npcId = npcId
@@ -507,6 +564,7 @@ return function(mod)
     clearMarker(id)
     remoteMarkers[id] = nil
     remoteNames[id] = nil
+    remoteSprites[id] = nil
   end
 
   -- local player changed maps: every tracked player's marker needs to
@@ -518,7 +576,7 @@ return function(mod)
       clearMarker(id)
       if m.mapId == localMapId() then
         local npcId, err = mod.world:spawnNpc(m.mapId, {
-          sprite = spriteIdFor(id), x = m.x, y = m.y,
+          sprite = remoteSprites[id] or spriteIdFor(id), x = m.x, y = m.y,
         })
         if npcId then
           m.npcId = npcId
@@ -541,7 +599,8 @@ return function(mod)
     table.sort(ids)
     for _, id in ipairs(ids) do
       if id ~= selfId then
-        local fallback = PLAYER_LABELS[id] or "?"
+        local sprite = remoteSprites[id]
+        local fallback = (sprite and SPRITE_LABEL_BY_ID[sprite]) or PLAYER_LABELS[id] or "?"
         local name = remoteNames[id] or fallback
         items[#items + 1] = { label = ("%d %s (%s)"):format(id, name, fallback) }
       end
@@ -573,20 +632,20 @@ return function(mod)
   end
 
   -- Wire format is asymmetric on purpose: a client's outgoing line is
-  -- untagged ("mapId,x,y,name") since the host already knows who sent it
-  -- from which socket the data arrived on; everything the host sends out
-  -- is tagged ("id,mapId,x,y,name") since the receiving client needs to
-  -- know whose position this is, and it could be the host's or any
-  -- peer's. name is always the LAST field specifically so mapId (which
-  -- can itself contain digits/underscores but never a comma) stays easy
-  -- to pattern-match without worrying about name's contents shifting
-  -- field positions.
+  -- untagged ("mapId,x,y,name,sprite") since the host already knows who
+  -- sent it from which socket the data arrived on; everything the host
+  -- sends out is tagged ("id,mapId,x,y,name,sprite") since the receiving
+  -- client needs to know whose position this is, and it could be the
+  -- host's or any peer's. sprite is always the LAST field, name second
+  -- to last, so mapId (which can itself contain digits/underscores but
+  -- never a comma) stays easy to pattern-match from the front regardless
+  -- of what's in the trailing fields.
 
   -- host only, tied to the host's own movement (world.stepped): sends
   -- the host's own position to every connected player, tagged id 0.
   local function hostBroadcastOwn(payload)
-    local hostLine = string.format("0,%s,%d,%d,%s\n",
-      tostring(payload.mapId), payload.x, payload.y, localName())
+    local hostLine = string.format("0,%s,%d,%d,%s,%s\n",
+      tostring(payload.mapId), payload.x, payload.y, localName(), localSprite())
     for _, p in ipairs(peers) do
       p.socket:send(hostLine) -- best-effort; a dead peer gets cleaned up below
     end
@@ -602,11 +661,14 @@ return function(mod)
       while true do
         local line, err = p.socket:receive("*l")
         if line then
-          local mapId, x, y, name = line:match("^(.-),(%-?%d+),(%-?%d+),(.*)$")
+          local mapId, x, y, name, sprite =
+            line:match("^(.-),(%-?%d+),(%-?%d+),(.-),(.*)$")
           if mapId then
-            mod.log:info("player %d: map=%s x=%s y=%s name=%s", p.id, mapId, x, y, name)
-            updateMarker(p.id, mapId, tonumber(x), tonumber(y), name)
-            local relayLine = string.format("%d,%s,%s,%s,%s\n", p.id, mapId, x, y, name)
+            mod.log:info("player %d: map=%s x=%s y=%s name=%s sprite=%s",
+              p.id, mapId, x, y, name, sprite)
+            updateMarker(p.id, mapId, tonumber(x), tonumber(y), name, sprite)
+            local relayLine = string.format("%d,%s,%s,%s,%s,%s\n",
+              p.id, mapId, x, y, name, sprite)
             for j, other in ipairs(peers) do
               if j ~= i then other.socket:send(relayLine) end
             end
@@ -633,8 +695,8 @@ return function(mod)
   -- (see hostRelay's comment on the wire format)
   local function sendPosition(payload)
     if not peer then return end
-    local line = string.format("%s,%d,%d,%s\n",
-      tostring(payload.mapId), payload.x, payload.y, localName())
+    local line = string.format("%s,%d,%d,%s,%s\n",
+      tostring(payload.mapId), payload.x, payload.y, localName(), localSprite())
     local ok, err = peer:send(line)
     if not ok and err ~= "timeout" then
       mod.log:warn("send failed: %s - peer likely disconnected", tostring(err))
@@ -644,17 +706,20 @@ return function(mod)
     end
   end
 
-  -- client only: everything the host sends is tagged "id,mapId,x,y" -
-  -- id 0 is the host, anything else is a relayed player
+  -- client only: everything the host sends is tagged
+  -- "id,mapId,x,y,name,sprite" - id 0 is the host, anything else is a
+  -- relayed player
   local function receivePositions()
     if not peer then return end
     while true do
       local line, err = peer:receive("*l")
       if line then
-        local id, mapId, x, y, name = line:match("^(%-?%d+),(.-),(%-?%d+),(%-?%d+),(.*)$")
+        local id, mapId, x, y, name, sprite =
+          line:match("^(%-?%d+),(.-),(%-?%d+),(%-?%d+),(.-),(.*)$")
         if id then
-          mod.log:info("player %s: map=%s x=%s y=%s name=%s", id, mapId, x, y, name)
-          updateMarker(tonumber(id), mapId, tonumber(x), tonumber(y), name)
+          mod.log:info("player %s: map=%s x=%s y=%s name=%s sprite=%s",
+            id, mapId, x, y, name, sprite)
+          updateMarker(tonumber(id), mapId, tonumber(x), tonumber(y), name, sprite)
         end
       elseif err == "timeout" then
         break -- nothing more to read right now, try again next step

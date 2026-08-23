@@ -53,7 +53,10 @@ digits), since a relay address needs them.
 - Everything is driven from an in-game menu: open the **START** menu,
   select **GEN1COOP**, then **HOST** or **JOIN**. **MY NAME** sets your
   display name (shown to everyone else in their **PLAYERS** list); it
-  defaults to "PLAYER" if you never set one.
+  defaults to "PLAYER" if you never set one. **MY SPRITE** picks which
+  real game sprite you show up as to other players (Red, Blue, or a
+  handful of common trainer NPCs) - defaults to Red until you change it.
+  Both choices are saved, so you only set them once.
 - Every time a player takes a step, their map/x/y position is sent to
   whoever they're connected to (the LAN host, or the relay server),
   which forwards it to every other connected player.

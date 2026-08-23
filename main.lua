@@ -132,6 +132,22 @@
 -- unbalanced for whatever draws next - this is screen-space code with no
 -- way for me to watch it run, so it has to fail safe by construction.
 --
+-- v0.0.22: MrJoufflu's first real screenshot of v0.0.21 - "bcp trop
+-- gros" (way too big), the name comically oversized next to the
+-- sprite, next to a real (correctly-sized) naming-screen textbox for
+-- comparison in the same shot. Root cause: the label's own TEXT SIZE
+-- was drawn with the same zoom-scaled sx/sy used for its POSITION
+-- (Zoom.scale(fitScale())) - correct for tracking the sprite as the
+-- player zooms, but a real UI textbox's font never grows with survey
+-- zoom (Renderer:uiScale() deliberately caps at fitScale - "Zooming IN
+-- does not scale the UI up"), so a zoomed view made the label balloon
+-- while dialogue text stayed put. Split into two scales: position still
+-- uses the zoom-aware one (so the label keeps tracking the sprite), the
+-- text itself now uses fitScale alone, further halved (LABEL_SCALE) so
+-- it reads as a small caption rather than full dialogue-text size. Not
+-- re-verified against another screenshot yet - a reasoned fix for what
+-- the screenshot showed, not a confirmed one.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -800,7 +816,22 @@ return function(mod)
     local Sp = Renderer:fitScale()
     local sp = Zoom.scale(Sp)
     if not sp or sp <= 0 then return end
+    -- sx/sy (zoom-scaled) place the label's ANCHOR POINT - has to match
+    -- the world canvas's own scale exactly, or the label drifts off the
+    -- sprite as the player zooms. tsx/tsy (fitScale only, NOT
+    -- zoom-scaled) size the TEXT ITSELF - a real UI textbox's font never
+    -- grows with the survey zoom (Renderer:uiScale() deliberately caps
+    -- at fitScale, "Zooming IN does not scale the UI up"), so a label
+    -- using the zoomed sx/sy for its own size read as comically
+    -- oversized the moment the player zoomed in even a little (reported
+    -- with a screenshot: "bcp trop gros" right after this shipped).
     local sx, sy = sp / dpiX, sp / dpiY
+    -- half fitScale, not full: a name tag reads better as a small caption
+    -- than as full dialogue-box-sized text, and the reported "bcp trop
+    -- gros" screenshot looked oversized even accounting for the zoom
+    -- decoupling above - a plain guess at a better size, not verified
+    local LABEL_SCALE = 0.5
+    local tsx, tsy = Sp * LABEL_SCALE / dpiX, Sp * LABEL_SCALE / dpiY
     local wvw, wvh = Renderer.worldCanvas:getWidth(), Renderer.worldCanvas:getHeight()
     local wox = math.floor((pw - wvw * sp) / 2) / dpiX
     local woy = math.floor((ph - wvh * sp) / 2) / dpiY
@@ -827,7 +858,7 @@ return function(mod)
           local screenY = woy + canvasY * sy
           local name = remoteNames[id] or PLAYER_LABELS[id] or "?"
           love.graphics.push()
-          local ok, err = pcall(drawOneLabel, screenX, screenY, sx, sy, name)
+          local ok, err = pcall(drawOneLabel, screenX, screenY, tsx, tsy, name)
           love.graphics.pop()
           if not ok then
             mod.log:warn("name label draw failed for player %d: %s", id, tostring(err))

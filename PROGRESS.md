@@ -10,6 +10,35 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.22: name label was way oversized - first real testing feedback
+
+MrJoufflu's first screenshot of v0.0.21 in actual play: "bcp trop gros"
+(way too big) - the floating name genuinely dwarfed the sprite next to
+it, with a real naming-screen textbox visible in the same shot for
+comparison (much smaller, as expected).
+
+Root cause, reasoned from the screenshot rather than a debugger (still
+can't run this myself): `drawOneLabel` was scaled with `sx/sy`, the same
+zoom-aware scale used to POSITION the label
+(`Zoom.scale(Renderer:fitScale())` - correct for that, since the label
+has to track the sprite exactly as the player zooms the world in or
+out). But a real UI textbox's font is explicitly NOT zoom-scaled -
+`Renderer:uiScale()`'s own comment: "Zooming IN does not scale the UI
+up... the letterbox it sits in does not grow either." So the moment
+survey zoom was engaged above 1x, the label's text grew right along with
+the world while every other piece of UI text on screen stayed put -
+reads as "the name is huge" even though the underlying math was
+internally consistent.
+
+Fix: split into two scales. Position keeps the zoom-aware one
+(`sx/sy`); the text itself now uses `Renderer:fitScale()` alone
+(`tsx/tsy`, not zoom-scaled), further multiplied by a `LABEL_SCALE = 0.5`
+guess on top - a name tag reading as a small caption rather than
+full dialogue-text size felt like the more reasonable target size even
+before accounting for the zoom bug, going by how the screenshot looked
+oversized by more than just the zoom factor alone could explain. Not
+re-verified against a second screenshot yet.
+
 ## v0.0.15 through v0.0.20 CONFIRMED WORKING in real play
 
 MrJoufflu, in passing while asking for the name-label feature below:

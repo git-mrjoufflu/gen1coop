@@ -1,7 +1,7 @@
 {
   "id": "gen1coop",
   "name": "Gen1 Co-op (prototype)",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "github": "git-mrjoufflu/gen1coop",
   "api": 2,
   "permissions": ["network", "engine_internals"],

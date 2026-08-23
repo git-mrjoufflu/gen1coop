@@ -143,10 +143,11 @@
 -- does not scale the UI up"), so a zoomed view made the label balloon
 -- while dialogue text stayed put. Split into two scales: position still
 -- uses the zoom-aware one (so the label keeps tracking the sprite), the
--- text itself now uses fitScale alone, further halved (LABEL_SCALE) so
--- it reads as a small caption rather than full dialogue-text size. Not
--- re-verified against another screenshot yet - a reasoned fix for what
--- the screenshot showed, not a confirmed one.
+-- text itself now uses fitScale alone, further scaled down (LABEL_SCALE)
+-- so it reads as a small caption rather than full dialogue-text size.
+--
+-- v0.0.23: "en fait je le veux quand meme petit" - v0.0.22's LABEL_SCALE
+-- 0.5 still wasn't small enough. Cut to 0.3.
 --
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
@@ -826,11 +827,11 @@ return function(mod)
     -- oversized the moment the player zoomed in even a little (reported
     -- with a screenshot: "bcp trop gros" right after this shipped).
     local sx, sy = sp / dpiX, sp / dpiY
-    -- half fitScale, not full: a name tag reads better as a small caption
-    -- than as full dialogue-box-sized text, and the reported "bcp trop
-    -- gros" screenshot looked oversized even accounting for the zoom
-    -- decoupling above - a plain guess at a better size, not verified
-    local LABEL_SCALE = 0.5
+    -- a fraction of fitScale, not full: a name tag reads better as a
+    -- small caption than as full dialogue-box-sized text. 0.5 (v0.0.22)
+    -- still wasn't small enough per MrJoufflu's follow-up ("en fait je
+    -- le veux quand meme petit" - I still want it small) - cut further.
+    local LABEL_SCALE = 0.3
     local tsx, tsy = Sp * LABEL_SCALE / dpiX, Sp * LABEL_SCALE / dpiY
     local wvw, wvh = Renderer.worldCanvas:getWidth(), Renderer.worldCanvas:getHeight()
     local wox = math.floor((pw - wvw * sp) / 2) / dpiX

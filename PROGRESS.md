@@ -10,6 +10,13 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.23: name label still too big, cut LABEL_SCALE further
+
+MrJoufflu after v0.0.22: "en fait je le veux quand meme petit" (I still
+want it small). `LABEL_SCALE` (introduced in v0.0.22, was 0.5) cut to
+0.3 - no other logic changes. Still a guess, not re-verified against a
+screenshot.
+
 ## v0.0.22: name label was way oversized - first real testing feedback
 
 MrJoufflu's first screenshot of v0.0.21 in actual play: "bcp trop gros"

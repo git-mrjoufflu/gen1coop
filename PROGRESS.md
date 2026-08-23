@@ -10,7 +10,30 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.7) built, awaiting real two-player test
+## Status: Step 1 (v0.0.8) built, awaiting real two-player test
+
+**v0.0.8 - two fixes from real testing feedback:**
+1. v0.0.7 loaded fine (GEN1COOP appeared in the START menu) but choosing
+   HOST or JOIN appeared to do "rien" (nothing) - a real UX bug, not a
+   crash. `notify()` was still queuing messages for `world.stepped` to
+   flush, a leftover from when `game.ready` auto-started a connection
+   (pre-v0.0.6) and pushing UI that early was untested. Since v0.0.6
+   removed that auto-start, `startHost`/`startClient` only ever run from
+   a menu selection or from inside `world.stepped` itself - both already
+   safe contexts - so the deferral no longer serves a purpose and just
+   made the confirmation textbox wait for the player's next step, which
+   read as "nothing happened." `notify()` now pushes immediately.
+2. Added the host's own LAN IP to the "hosting" textbox (requested:
+   "quad on clique sur host faudrait pouvoir voir son ip") - via the
+   classic LuaSocket trick of a UDP `setpeername` + `getsockname` (no
+   real packet sent, no internet needed, just asks the OS which local
+   address would route to an external IP), falling back to hostname
+   resolution. No more alt-tabbing to `ipconfig` to find it.
+
+Also suggested: a lobby/discovery system instead of manual IP entry.
+Deliberately not building that yet - bigger scope (LAN broadcast
+discovery or a relay-based room code), and manual IP entry needs to be
+proven reliable first before replacing it with something more complex.
 
 **v0.0.7 - real bug, caught by the mod manager's error screen:** v0.0.6
 crashed on load - `mods/gen1coop/main.lua:139: attempt to call method

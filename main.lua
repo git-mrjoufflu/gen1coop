@@ -43,21 +43,17 @@ return function(mod)
   }
 
   local game = nil -- captured from game.ready; needed to push any UI
-  local pendingNotify = nil
 
   -- game.ready can fire before the player is actually in control (title
   -- screen, save select, intro) - pushing a textbox right then is
-  -- untested territory, so notify() just queues the message and
-  -- world.stepped (which only ever fires once real overworld movement is
-  -- happening) is what actually shows it.
+  -- untested territory. That's not a concern for notify() any more,
+  -- though: as of v0.0.6 nothing calls startHost/startClient
+  -- automatically at boot - they only ever run from a menu selection or
+  -- from inside world.stepped (serviceHost/sendPosition), both already
+  -- well past any boot-time risk - so this just pushes immediately.
   local function notify(text)
-    pendingNotify = text
-  end
-
-  local function flushNotify()
-    if not pendingNotify or not game or not game.stack then return end
-    game.stack:push(TextBox.new(game, pendingNotify, function() end))
-    pendingNotify = nil
+    if not game or not game.stack then return end
+    game.stack:push(TextBox.new(game, text, function() end))
   end
 
   -- state: "idle" -> "listening" (host, waiting for a client) or
@@ -80,6 +76,33 @@ return function(mod)
     return true
   end
 
+  -- classic LuaSocket trick: a UDP "connect" doesn't send anything or
+  -- need the peer to be reachable, it just makes the OS pick a local
+  -- address for that route - getsockname() then hands back this
+  -- machine's LAN IP without needing an actual internet connection.
+  -- Falls back to hostname resolution, then nil (caller just omits the
+  -- line) if both fail - not fatal either way, the port still works and
+  -- ipconfig/Settings is still an option.
+  local function localIP()
+    local ok, udp = pcall(socket.udp)
+    if ok and udp then
+      local connected = udp:setpeername("8.8.8.8", 80)
+      if connected then
+        local ip = udp:getsockname()
+        udp:close()
+        if ip then return ip end
+      else
+        udp:close()
+      end
+    end
+    local hostname = socket.dns.gethostname and socket.dns.gethostname()
+    if hostname then
+      local ip = socket.dns.toip and select(1, socket.dns.toip(hostname))
+      if ip and ip ~= "127.0.0.1" then return ip end
+    end
+    return nil
+  end
+
   local function startHost()
     if not ensureSocket() then return end
     isHost = true
@@ -93,8 +116,14 @@ return function(mod)
     s:settimeout(0)
     master = s
     state = "listening"
-    mod.log:info("hosting on port %d, waiting for a player to join...", PORT)
-    notify(("Gen1Coop: en\nattente sur le\nport %d..."):format(PORT))
+    local ip = localIP()
+    mod.log:info("hosting on port %d (ip %s), waiting for a player to join...",
+      PORT, tostring(ip))
+    if ip then
+      notify(("Gen1Coop: IP\n%s\nport %d\nen attente..."):format(ip, PORT))
+    else
+      notify(("Gen1Coop: en\nattente sur le\nport %d...\n(IP inconnue)"):format(PORT))
+    end
   end
 
   local function startClient(ip)
@@ -201,7 +230,6 @@ return function(mod)
   end)
 
   mod.events:on("world.stepped", function(payload)
-    flushNotify()
     if isHost then
       serviceHost()
     end

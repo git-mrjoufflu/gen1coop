@@ -19,7 +19,10 @@ One player **hosts** (opens a TCP port and waits). The host's own game
 also relays every other player's position to everyone else - a star
 topology, not a full mesh, so nobody but the host needs to know more
 than one IP address. Up to 10 players total (1 host + 9 joiners).
-Everyone else picks **JOIN** and types the host's LAN IP.
+Everyone else picks **FIND HOST** to auto-discover the host on the LAN
+(no typing needed), or **JOIN** to type the host's LAN IP by hand if
+auto-discovery doesn't find it (some networks block the broadcast
+traffic it relies on).
 
 ### B) Internet play (viewers/friends not on your network, no VPN)
 
@@ -51,12 +54,15 @@ digits), since a relay address needs them.
 ## What this does
 
 - Everything is driven from an in-game menu: open the **START** menu,
-  select **GEN1COOP**, then **HOST** or **JOIN**. **MY NAME** sets your
-  display name (shown to everyone else in their **PLAYERS** list); it
-  defaults to "PLAYER" if you never set one. **MY SPRITE** picks which
-  real game sprite you show up as to other players (Red, Blue, or a
-  handful of common trainer NPCs) - defaults to Red until you change it.
-  Both choices are saved, so you only set them once.
+  select **GEN1COOP**, then **HOST**, **JOIN** or **FIND HOST**. **FIND
+  HOST** is LAN-only - it listens for a beacon the host broadcasts on the
+  network, so it can't find a relay-server (internet) host; use **JOIN**
+  with the relay address for that. **MY NAME** sets your display name
+  (shown to everyone else in their **PLAYERS** list); it defaults to
+  "PLAYER" if you never set one. **MY SPRITE** picks which real game
+  sprite you show up as to other players (Red, Blue, or a handful of
+  common trainer NPCs) - defaults to Red until you change it. Both
+  choices are saved, so you only set them once.
 - Every time a player takes a step, their map/x/y position is sent to
   whoever they're connected to (the LAN host, or the relay server),
   which forwards it to every other connected player.
@@ -81,8 +87,12 @@ digits), since a relay address needs them.
    confirms it's listening and shows the host's IP. **Internet**: skip
    this step, nobody hosts from inside the game.
 3. On **every other player** (and, for internet play, yourself too):
-   open START > GEN1COOP > JOIN, type the address on the keypad, confirm
-   with the ED cell.
+   **LAN**: open START > GEN1COOP > FIND HOST and wait a few seconds -
+   it should connect on its own once it hears the host's beacon. If it
+   times out with "no host found," fall back to JOIN with the host's IP
+   (some networks block the broadcast FIND HOST needs). **Internet**:
+   open START > GEN1COOP > JOIN, type the relay address on the keypad,
+   confirm with the ED cell.
 4. Walk around on any side (outgoing position updates only send on
    movement - so if nothing seems to happen, take a step). You should
    see, LAN mode: host shows "player N connected! (n/9)" per player,
@@ -115,6 +125,12 @@ still running and you copied the address correctly.
   need adjusting once it's actually seen in game.
 - Fixed default port (51820) for LAN hosting, not configurable in-game
   (yet). Relay addresses can use any port, since they're typed in full.
+- FIND HOST relies on UDP broadcast (port 51821), which some networks
+  are stricter about than the direct TCP connection JOIN uses - if it
+  times out with "no host found," JOIN with the host's IP is always
+  the fallback. Android in particular sometimes restricts broadcast
+  traffic at the OS level; not yet confirmed whether FIND HOST works
+  there.
 - LAN star topology: if the host quits, everyone's connection drops (the
   host's own game is the relay, not a separate server). Relay mode
   doesn't have this problem, but does depend on the relay server staying

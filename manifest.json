@@ -1,7 +1,7 @@
 {
   "id": "gen1coop",
   "name": "Gen1 Co-op (prototype)",
-  "version": "0.0.23",
+  "version": "0.0.25",
   "github": "git-mrjoufflu/gen1coop",
   "api": 2,
   "permissions": ["network", "engine_internals"],
@@ -13,5 +13,5 @@
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],
-  "description": "Experimental overworld co-op prototype for up to 10 players, LAN or internet. Fully in-game menu: START > GEN1COOP > HOST (LAN) or JOIN (a LAN IP, or a relay_server.py address for internet play with viewers/friends - no VPN or port forwarding needed), MY NAME (set your display name), MY SPRITE (pick which real game sprite you and others see you as) or PLAYERS (see who's connected, their name and sprite). Other players show up using real overworld sprites from the game itself, walking and facing the right direction as they move, with their name floating above them - no custom art."
+  "description": "Experimental overworld co-op prototype for up to 10 players, LAN or internet. Fully in-game menu: START > GEN1COOP > HOST (LAN) or JOIN (a LAN IP, or a relay_server.py address for internet play with viewers/friends - no VPN or port forwarding needed), FIND HOST (auto-discover a LAN host, no IP needed), MY NAME (set your display name), MY SPRITE (pick which real game sprite you and others see you as) or PLAYERS (see who's connected, their name and sprite). Other players show up using real overworld sprites from the game itself, walking and facing the right direction as they move, with their name floating above them - no custom art."
 }

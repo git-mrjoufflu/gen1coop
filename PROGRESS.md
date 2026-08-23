@@ -10,6 +10,99 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.25: name label unstable in "vox3d" - a third-party pipeline, not Tilt
+
+MrJoufflu, with a screenshot: "les nom quand on est en vox3d bouge et ne
+sont pas stable sur le dessus du perso" (the names move around and
+aren't stable above the character in vox3d mode). The screenshot showing
+the isometric-looking buildings in the v0.0.21/v0.0.22 reports was this
+mode the whole time - it just took a name explicitly wrong to place it.
+
+Found via `docs/modding.md`'s "Rendering pipelines" section: "vox3d" is
+`mods/voxel_world`, a real example third-party mod that registers a
+whole alternate world-rendering pipeline ("a 3D diorama overworld plus a
+tilt-shift miniature pass") through `render_pipelines`, which can
+replace the normal flat/tilt world pass entirely via
+`Renderer:setWorldOverride(canvas)` - and per that same doc, "a world
+pipeline and the engine's own TILT are mutually exclusive," so this is a
+genuinely separate case from the `Tilt.active()` check already in place,
+not a variant of it. `drawNameLabels`'s whole approach - mirroring
+`Renderer:endFrame`'s flat `worldCanvas` blit math - has no meaning once
+a pipeline owns the world pass instead (a 3D diorama isn't a flat
+canvas blitted at a fixed scale/offset at all), which is exactly why the
+label was drifting instead of just being positioned wrong: the numbers
+it was computing were arbitrary in that mode.
+
+Added a second bail-out, `Pipelines.worldPipeline()` (nil when the
+vanilla flat/tilt path owns the frame) - the exact same query
+`src/world/OverworldController.lua` itself uses to decide whether a
+pipeline gets the frame instead of the normal draw. Confirmed
+`Renderer.worldOverride` itself isn't usable for this check: like
+`worldActive`, it's unconditionally reset to nil at the end of every
+`endFrame`, so by the time `render.hud` fires (after `endFrame` has
+already returned) it always reads nil regardless of what actually
+happened that frame - `worldPipeline()` is a live, persistent query
+instead of a per-frame flag, which is why it works here where
+`worldOverride` wouldn't have.
+
+Net effect: the label now simply doesn't draw at all while a
+third-party world pipeline (voxel_world or otherwise) is active, the
+same "skip rather than guess wrong" choice already made for Tilt mode.
+Not yet re-verified against another screenshot.
+
+## v0.0.24: FIND HOST - LAN auto-discovery, no IP typing needed
+
+MrJoufflu: "serais t'il possible de trouvez l'hotes de session sans
+entré d'ip? (local lan seulement)" (could we find the session host
+without typing an IP - LAN only). Manual JOIN stays exactly as it was
+(still the only option for internet/relay play, and still there as a
+LAN fallback); FIND HOST is a new, separate menu item next to it.
+
+- Host side: `startHost()` also opens a UDP socket
+  (`setoption("broadcast", true)`) once the TCP listener is up.
+  `broadcastDiscovery()`, called every `input.step` alongside
+  `serviceHost()`/`hostReceiveAndRelay()`, sends one
+  `"GEN1COOP_HOST:" .. localName()` packet to `255.255.255.255` on
+  `DISCOVERY_PORT` (51821, deliberately a different port from the TCP
+  game port 51820) roughly once a second (`DISCOVERY_TICK_FRAMES = 60`,
+  a plain frame counter - no need for real timestamps at this
+  granularity). Skips broadcasting once the lobby is full, so a search
+  doesn't get lured toward a host that can't accept it. Best-effort:
+  if the UDP setup fails for any reason, it just logs and hosting
+  continues normally - FIND HOST becoming unavailable was never meant
+  to block the fallback (manual JOIN with the host's IP still works
+  regardless).
+- Client side: `startDiscovery()` (new `state = "discovering"`) opens a
+  UDP socket bound to `DISCOVERY_PORT` and listens; `pollDiscovery()`
+  (wired into `input.step`, same pattern as `pollConnect()`) checks any
+  received packet for the `"GEN1COOP_HOST:"` prefix and, on a match,
+  reads the sender's IP straight off `receivefrom`'s own return value
+  (not anything the payload has to encode) and hands off directly into
+  the existing `startClient(ip)` - from that point on it's identical to
+  a manual JOIN, same connect/relay code either way. Gives up after
+  `DISCOVERY_TIMEOUT_SECONDS` (5s) with a message pointing at JOIN
+  instead, mirroring `pollConnect`'s own timeout message.
+- Caught a real forward-reference bug before shipping (same class as the
+  `showPlayerList` one documented near the top of this file):
+  `startDiscovery` was originally written right next to `pollDiscovery`,
+  much later in the file than `openConnectMenu`'s new FIND HOST button
+  that calls it - since Lua resolves a name used before any `local` with
+  that name has been declared (in source order) as a global lookup, that
+  button would have called a nil global and errored the moment someone
+  pressed it. Moved `startDiscovery` up next to `pollConnect` (before
+  `openConnectMenu`), left `pollDiscovery` where it was (only referenced
+  from the `input.step` hook at the very bottom, so no ordering issue
+  there).
+- Real caveats, not yet tested: UDP broadcast reliability varies more
+  than TCP does across networks - the same firewall/AP-isolation
+  concerns that hit direct connections apply here too, and Android in
+  particular sometimes restricts broadcast/multicast traffic at the OS
+  level in ways LuaSocket has no lever for from inside this mod. If FIND
+  HOST doesn't turn anything up, manual JOIN with the host's IP is
+  always still there as the fallback - this was designed as a
+  convenience layered on top of the existing path, not a replacement
+  for it.
+
 ## v0.0.23: name label still too big, cut LABEL_SCALE further
 
 MrJoufflu after v0.0.22: "en fait je le veux quand meme petit" (I still

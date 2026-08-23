@@ -149,6 +149,37 @@
 -- v0.0.23: "en fait je le veux quand meme petit" - v0.0.22's LABEL_SCALE
 -- 0.5 still wasn't small enough. Cut to 0.3.
 --
+-- v0.0.24: "serais t'il possible de trouvez l'hotes de session sans
+-- entré d'ip? (local lan seulement)" - FIND HOST, a new menu item next
+-- to JOIN. While hosting, a UDP socket (DISCOVERY_PORT, separate from
+-- PORT) broadcasts a small beacon to the LAN roughly once a second
+-- (broadcastDiscovery); FIND HOST just opens a UDP socket and listens
+-- for one, reading the host's real IP off the packet's own sender
+-- address (UDP recvfrom, not anything the payload has to spell out)
+-- rather than asking anyone to type it in, then hands off straight into
+-- startClient - the exact same connect path manual JOIN already uses.
+-- LAN-only on purpose: broadcast packets don't cross the internet, so
+-- relay/internet play still needs the manual JOIN flow. Gives up after
+-- DISCOVERY_TIMEOUT_SECONDS with a message pointing at JOIN instead, the
+-- same shape as pollConnect's own timeout.
+--
+-- v0.0.25: "les nom quand on est en vox3d bouge et ne sont pas stable
+-- sur le dessus du perso" (the names drift/aren't stable above the
+-- character in vox3d mode) - a real screenshot in `mods/voxel_world`
+-- ("vox3d"), a THIRD-PARTY render pipeline (docs/modding.md's
+-- "Rendering pipelines" section) that replaces the whole world pass with
+-- its own 3D diorama via Renderer:setWorldOverride - not the same thing
+-- as the engine's own Tilt mode (already skipped), and mutually
+-- exclusive with it per that same doc. drawNameLabels' flat worldCanvas
+-- math is meaningless once a pipeline owns the world pass, so it now
+-- also bails out via Pipelines.worldPipeline() (nil = vanilla flat/tilt,
+-- the same query src/world/OverworldController.lua itself uses to
+-- decide whether to hand the frame to a pipeline). Renderer.worldOverride
+-- itself isn't usable for this check - like worldActive, it gets reset
+-- to nil at the end of every endFrame, so "was a pipeline active THIS
+-- frame" isn't visible by the time render.hud runs; worldPipeline()
+-- answers the persistent "is one active right now" question instead.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -171,8 +202,21 @@ return function(mod)
   local Zoom = require("src.render.Zoom")
   local Tilt = require("src.render.Tilt")
   local Font = require("src.render.Font")
+  local Pipelines = require("src.render.Pipelines")
 
   local PORT = 51820
+  -- LAN auto-discovery (FIND HOST): a UDP port, deliberately different
+  -- from PORT (the TCP game port) to keep the two concerns apart even
+  -- though a TCP and a UDP socket could technically share one number.
+  -- Host-only: broadcasts a periodic beacon while listening; a client
+  -- who picks FIND HOST just listens for one, reading the host's real
+  -- IP straight off the packet's sender address (UDP's own recvfrom
+  -- return, not anything embedded in the payload) rather than asking
+  -- anyone to type it in. Internet/relay play still needs manual JOIN -
+  -- broadcast traffic doesn't cross the internet, only the LAN.
+  local DISCOVERY_PORT = 51821
+  local DISCOVERY_MAGIC = "GEN1COOP_HOST:"
+  local DISCOVERY_TIMEOUT_SECONDS = 5
   -- accepts a plain LAN IP or a "host:port" relay address - kept short,
   -- the naming screen's title bar has limited room
   local NAMING_TITLE = "ADDRESS?"
@@ -315,7 +359,7 @@ return function(mod)
   end
 
   -- state: "idle" -> "listening" (host, waiting for players) or
-  -- "connecting" (client) -> "connected" -> "error"
+  -- "connecting"/"discovering" (client) -> "connected" -> "error"
   -- Host and client use different shapes of "who am I talking to":
   -- a client only ever has one connection (to the host), a host has a
   -- growing list as players join.
@@ -326,6 +370,14 @@ return function(mod)
   local peers = {}     -- host only: list of { socket, id }, one per joined player
   local nextPeerId = 1 -- host only: 0 is the host itself, 1+ for joiners
   local socket = nil   -- set once require("socket") is confirmed to work
+
+  -- host only: UDP socket the periodic FIND HOST beacon goes out on
+  local discoveryBeacon = nil
+  local discoveryTick = 0 -- frame counter, so the beacon sends roughly once a second, not every input.step
+  -- client only: UDP socket while state == "discovering", plus when the
+  -- search started (for DISCOVERY_TIMEOUT_SECONDS)
+  local discoveryListener = nil
+  local discoveryStartedAt = nil
 
   local function ensureSocket()
     if socket then return true end
@@ -392,6 +444,24 @@ return function(mod)
     s:settimeout(0)
     master = s
     state = "listening"
+    -- best-effort: FIND HOST is a convenience, not the only way to join
+    -- (manual JOIN with a typed IP still works even if this fails) - so a
+    -- broadcast-socket problem here logs and moves on rather than
+    -- blocking hosting over it
+    local ok, du = pcall(socket.udp)
+    if ok and du then
+      du:setsockname("*", 0)
+      local bok, berr = du:setoption("broadcast", true)
+      if bok then
+        discoveryBeacon = du
+        discoveryTick = 0
+      else
+        mod.log:warn("discovery beacon: setoption broadcast failed: %s", tostring(berr))
+        du:close()
+      end
+    else
+      mod.log:warn("discovery beacon: socket.udp() failed: %s", tostring(du))
+    end
     local ip = localIP()
     mod.log:info("hosting on port %d (ip %s), waiting for a player to join...",
       PORT, tostring(ip))
@@ -505,6 +575,44 @@ return function(mod)
     pendingConnect = nil
   end
 
+  -- client only: FIND HOST - opens a UDP socket bound to DISCOVERY_PORT
+  -- and starts listening for a host's beacon, instead of asking for a
+  -- typed IP. LAN-only by nature: broadcast packets don't cross the
+  -- internet, so a relay-server address still needs the manual JOIN flow.
+  -- Defined here (before openConnectMenu, not down by pollDiscovery
+  -- below) for the same forward-reference reason showPlayerList is
+  -- forward-declared near the top of this file: openConnectMenu's FIND
+  -- HOST button references this by name, and Lua resolves an
+  -- undeclared-at-that-point name as a global, not "not yet assigned" -
+  -- calling this straight from startClient/pollConnect's neighborhood
+  -- (rather than forward-declaring it and defining it near pollDiscovery
+  -- later) keeps the connect-flow functions together instead of
+  -- splitting startDiscovery from the pollDiscovery it hands off to.
+  local function startDiscovery()
+    if not ensureSocket() then return end
+    local u, err = socket.udp()
+    if not u then
+      mod.log:error("discovery: socket.udp() failed: %s", tostring(err))
+      state = "error"
+      notify("Gen1Coop:\nnetwork (socket)\nunavailable\non this build.")
+      return
+    end
+    local ok, berr = u:setsockname("*", DISCOVERY_PORT)
+    if not ok then
+      mod.log:error("discovery: bind on port %d failed: %s", DISCOVERY_PORT, tostring(berr))
+      u:close()
+      state = "error"
+      notify(("Error: port\n%d taken or\nblocked."):format(DISCOVERY_PORT))
+      return
+    end
+    u:settimeout(0)
+    discoveryListener = u
+    discoveryStartedAt = os.time()
+    isHost = false
+    state = "discovering"
+    notify("Gen1Coop:\nsearching LAN\nfor a host...")
+  end
+
   local function openConnectMenu()
     if not game then return end
     game.stack:push(Menu.new(game, {
@@ -537,6 +645,7 @@ return function(mod)
             notify(("Gen1Coop:\nkeyboard error:\n%s"):format(wrapAddress(tostring(err))))
           end
         end },
+      { label = "FIND HOST", onSelect = function() startDiscovery() end },
       { label = "PLAYERS", onSelect = function() showPlayerList() end },
       { label = "MY NAME", onSelect = function()
           -- no title override here, so ui.naming.grid's hook (scoped to
@@ -812,6 +921,19 @@ return function(mod)
     if not ow or not ow.camera or not Renderer.worldCanvas then return end
     if not g or not g.stack or g.stack:top() ~= ow then return end
     if Tilt.active() then return end
+    -- a mod-supplied world pipeline (e.g. mods/voxel_world, "vox3d")
+    -- replaces the whole world pass with its own 3D/diorama render via
+    -- Renderer:setWorldOverride - the flat worldCanvas geometry below is
+    -- meaningless there (confirmed with a real screenshot: the label
+    -- floated free of the sprite and drifted around instead of sitting
+    -- still above its head). Renderer.worldOverride itself gets reset to
+    -- nil at the end of every endFrame, so it can't be checked from here
+    -- ("was a pipeline active THIS frame" isn't visible by the time
+    -- render.hud runs) - Pipelines.worldPipeline() answers the
+    -- persistent question ("is one active right now") instead, the same
+    -- query src/render/Renderer.lua itself uses to decide whether to
+    -- call a pipeline's drawWorld this frame.
+    if Pipelines.worldPipeline() then return end
 
     local pw, ph, dpiX, dpiY = displayMetrics()
     local Sp = Renderer:fitScale()
@@ -912,6 +1034,25 @@ return function(mod)
       notify(("Gen1Coop:\nplayer %d (%s)\nconnected!\n(%d/%d)"):format(
         id, PLAYER_LABELS[id] or "?", #peers, MAX_PLAYERS - 1))
     end
+  end
+
+  -- host only, runs every input.step: sends one UDP broadcast roughly
+  -- once a second (DISCOVERY_TICK_FRAMES) so a FIND HOST client picks it
+  -- up without either side needing a request/response round trip - a
+  -- client just has to be listening when any one beacon lands, and
+  -- there's no harm broadcasting to a LAN with nobody listening.
+  -- discoveryBeacon can be nil (startHost's UDP setup failed, or hosting
+  -- hasn't started) - a no-op then, manual JOIN still works either way.
+  -- Skips once full: no point luring a FIND HOST search toward a lobby
+  -- that can't accept it.
+  local DISCOVERY_TICK_FRAMES = 60
+  local function broadcastDiscovery()
+    if not discoveryBeacon then return end
+    if #peers >= MAX_PLAYERS - 1 then return end
+    discoveryTick = discoveryTick + 1
+    if discoveryTick < DISCOVERY_TICK_FRAMES then return end
+    discoveryTick = 0
+    discoveryBeacon:sendto(DISCOVERY_MAGIC .. localName(), "255.255.255.255", DISCOVERY_PORT)
   end
 
   -- Wire format is asymmetric on purpose: a client's outgoing line is
@@ -1016,6 +1157,41 @@ return function(mod)
     end
   end
 
+  -- client only, runs every input.step while state == "discovering":
+  -- any packet starting with DISCOVERY_MAGIC is a host's beacon - the
+  -- host's IP comes from the packet's own sender address (UDP's
+  -- receivefrom), not from anything the payload has to spell out.
+  -- Gives up after DISCOVERY_TIMEOUT_SECONDS with no beacon seen, same
+  -- shape as pollConnect's own timeout - a search that never finds
+  -- anything must still tell the player instead of sitting there quiet.
+  local function pollDiscovery()
+    if not discoveryListener then return end
+    local data, ip = discoveryListener:receivefrom()
+    if data then
+      if data:sub(1, #DISCOVERY_MAGIC) == DISCOVERY_MAGIC then
+        mod.log:info("discovery: found host at %s", tostring(ip))
+        discoveryListener:close()
+        discoveryListener = nil
+        discoveryStartedAt = nil
+        startClient(ip)
+      end
+      -- anything else on this port is ignored, not treated as an error -
+      -- could be unrelated broadcast traffic on the same LAN
+      return
+    end
+    if ip ~= "timeout" then
+      mod.log:warn("discovery: receivefrom failed: %s", tostring(ip))
+    end
+    if os.time() - discoveryStartedAt > DISCOVERY_TIMEOUT_SECONDS then
+      mod.log:info("discovery: timed out after %ds, no host found", DISCOVERY_TIMEOUT_SECONDS)
+      discoveryListener:close()
+      discoveryListener = nil
+      discoveryStartedAt = nil
+      state = "error"
+      notify("Gen1Coop:\nno host found.\nTry JOIN with\nan IP instead.")
+    end
+  end
+
   -- world.stepped only fires when the LOCAL player takes a tile-step, so
   -- it's the right place for sending this player's own position (no
   -- point spamming an unchanged position every frame) but the wrong
@@ -1044,8 +1220,11 @@ return function(mod)
     if isHost then
       serviceHost()
       hostReceiveAndRelay()
+      broadcastDiscovery()
     elseif state == "connecting" then
       pollConnect()
+    elseif state == "discovering" then
+      pollDiscovery()
     elseif state == "connected" then
       receivePositions()
     end

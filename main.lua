@@ -1,47 +1,48 @@
 -- Gen1 Co-op prototype, step 1: prove two gen1recomp instances can talk
--- to each other at all. No visible remote player yet - this just opens a
--- direct TCP connection (LuaSocket, bundled in love.dll on every LOVE2D
--- build, no extra install needed) and shows an in-game textbox when the
--- connection is made, then logs the peer's position every time either
--- side takes a step.
+-- to each other at all. No visible remote player yet - the point of this
+-- slice is the connection itself, shown via an in-game textbox.
 --
--- Confirmation is a textbox, not just a log line, on purpose: the dev
--- console needs an env var set before launch, which isn't practical when
--- testing across different devices/platforms. A textbox needs nothing
--- extra - if you see it, the connection worked.
---
--- v0.0.3: EVERY failure path now shows a textbox too (bad/missing
--- config, no LuaSocket, bind/connect failure, wrong role). v0.0.2 only
--- had feedback for the success path - if require("socket") failed or
--- config.lua was missing, the mod returned early before ever
--- registering world.stepped, so nothing ever showed up in-game and it
--- looked like the mod just wasn't running at all. The event
--- subscriptions are now registered unconditionally first; everything
--- that can go wrong is checked inside them instead of before them.
+-- v0.0.6: everything is driven from an in-game menu now instead of a
+-- hand-edited config.lua. START menu > GEN1COOP > HOST or JOIN. JOIN
+-- opens a numeric keypad (built on NamingScreen, the same widget the
+-- naming/nickname screens use, with a custom digits-and-dot grid scoped
+-- to just this screen via its title) to type in the host's IP. This
+-- matters most for the Android side of testing, where hand-editing a
+-- text file inside an installed mod's folder isn't practical the way it
+-- is on PC.
 --
 -- Known rough edges, on purpose for a first slice:
--- - LAN/port-forward only, no relay server.
+-- - LAN/port-forward only, no relay server. Fixed port 51820.
 -- - Polling only happens on world.stepped (the local player has to move
---   for the socket to be serviced), not every frame. A per-frame tick
---   needs a render hook, which risks breaking rendering if the
---   passthrough is wrong - not worth that risk before the basic
---   connection is even proven to work.
+--   for the socket to be serviced), not every frame.
 -- - One peer only. No reconnect handling.
--- - Whichever build you're on needs LuaSocket (require("socket")) to
---   actually work - confirmed present on the Windows LOVE2D build. Not
---   verified on Switch/iOS/other builds. No documented simple Android
---   build for gen1recomp at all as of this writing.
---
--- Test plan: launch two gen1recomp instances with this mod installed,
--- config.lua set to role="host" on one and role="client" (host_ip set to
--- the host's LAN IP) on the other. Walk around on both sides after
--- loading in (world.stepped only fires on movement) - a textbox should
--- show SOMETHING on both sides within a step or two of loading in, even
--- if it's just an error.
+-- - Needs the "network" permission (declared in manifest.json) - mods
+--   run in a real sandbox (src/mods/Sandbox.lua) that denies
+--   require("socket") without it.
 
 return function(mod)
   local TextBox = require("src.render.TextBox")
-  local game = nil -- captured from game.ready; needed to push a textbox
+  local Menu = require("src.ui.Menu")
+  local NamingScreen = require("src.ui.NamingScreen")
+
+  local PORT = 51820
+  local NAMING_TITLE = "IP DU HOST?"
+
+  -- numeric keypad grid for IP entry - NamingScreen requires an "ED"
+  -- confirm cell and a trailing single-cell case-switch row to keep its
+  -- own confirm/case-flip logic working (see findMeta in NamingScreen.lua),
+  -- even though case doesn't mean anything for digits; both are inert
+  -- filler here.
+  local IP_GRID = {
+    { "1", "2", "3", "4", "5", "6", "7", "8", "9" },
+    { "0", ".", "ED", " ", " ", " ", " ", " ", " " },
+    { " ", " ", " ", " ", " ", " ", " ", " ", " " },
+    { " ", " ", " ", " ", " ", " ", " ", " ", " " },
+    { " ", " ", " ", " ", " ", " ", " ", " ", " " },
+    { "lower case" },
+  }
+
+  local game = nil -- captured from game.ready; needed to push any UI
   local pendingNotify = nil
 
   -- game.ready can fire before the player is actually in control (title
@@ -62,89 +63,88 @@ return function(mod)
   -- state: "idle" -> "listening" (host, waiting for a client) or
   -- "connecting" (client) -> "connected" -> "error"
   local state = "idle"
+  local isHost = false
   local master = nil -- host's listening socket
   local peer = nil    -- the live connection to the other player, once up
   local socket = nil  -- set once require("socket") is confirmed to work
-  local cfg = nil
 
-  local function loadConfig()
-    local body = mod:read("config.lua")
-    if not body then
-      mod.log:warn("no config.lua found")
-      notify("Gen1Coop:\nconfig.lua\nintrouvable.")
-      return nil
+  local function ensureSocket()
+    if socket then return true end
+    local ok, result = pcall(require, "socket")
+    if not ok then
+      mod.log:error("require('socket') failed: %s", tostring(result))
+      notify("Gen1Coop:\nreseau (socket)\nindisponible\nsur ce build.")
+      return false
     end
-    local chunk, err = loadstring(body, "config.lua")
-    if not chunk then
-      mod.log:warn("config.lua has a syntax error: %s", tostring(err))
-      notify("Gen1Coop:\nconfig.lua a\nune erreur de\nsyntaxe.")
-      return nil
-    end
-    local ok, result = pcall(chunk)
-    if not ok or type(result) ~= "table" then
-      mod.log:warn("config.lua did not return a table: %s", tostring(result))
-      notify("Gen1Coop:\nconfig.lua est\ninvalide.")
-      return nil
-    end
-    return result
+    socket = result
+    return true
   end
 
   local function startHost()
-    local s, err = socket.bind("*", cfg.port)
+    if not ensureSocket() then return end
+    isHost = true
+    local s, err = socket.bind("*", PORT)
     if not s then
-      mod.log:error("host bind on port %d failed: %s", cfg.port, tostring(err))
+      mod.log:error("host bind on port %d failed: %s", PORT, tostring(err))
       state = "error"
-      notify(("Erreur: port\n%d pris ou\nbloque."):format(cfg.port))
+      notify(("Erreur: port\n%d pris ou\nbloque."):format(PORT))
       return
     end
     s:settimeout(0)
     master = s
     state = "listening"
-    mod.log:info("hosting on port %d, waiting for a player to join...", cfg.port)
-    notify(("Gen1Coop: en\nattente sur le\nport %d..."):format(cfg.port))
+    mod.log:info("hosting on port %d, waiting for a player to join...", PORT)
+    notify(("Gen1Coop: en\nattente sur le\nport %d..."):format(PORT))
   end
 
-  local function startClient()
+  local function startClient(ip)
+    if not ensureSocket() then return end
+    isHost = false
     local s = socket.tcp()
     s:settimeout(5) -- one-time blocking connect attempt, 5s cap
-    local ok, err = s:connect(cfg.host_ip, cfg.port)
+    local ok, err = s:connect(ip, PORT)
     if not ok then
-      mod.log:error("could not connect to %s:%d - %s", cfg.host_ip, cfg.port, tostring(err))
+      mod.log:error("could not connect to %s:%d - %s", ip, PORT, tostring(err))
       state = "error"
-      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(cfg.host_ip))
+      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(ip))
       return
     end
     s:settimeout(0) -- non-blocking from here on
     peer = s
     state = "connected"
-    mod.log:info("connected to host %s:%d", cfg.host_ip, cfg.port)
-    notify(("Gen1Coop:\nconnecte a\n%s!"):format(cfg.host_ip))
+    mod.log:info("connected to host %s:%d", ip, PORT)
+    mod.save:set("last_ip", ip)
+    notify(("Gen1Coop:\nconnecte a\n%s!"):format(ip))
   end
 
-  -- everything that can go wrong lives in here, called from game.ready,
-  -- so there is always a textbox for it to reach (see the v0.0.3 note up
-  -- top for why this used to fail silently)
-  local function init()
-    local hasSocket, result = pcall(require, "socket")
-    if not hasSocket then
-      mod.log:error("require('socket') failed: %s", tostring(result))
-      notify("Gen1Coop:\nreseau (socket)\nindisponible\nsur ce build.")
-      return
-    end
-    socket = result
-
-    cfg = loadConfig()
-    if not cfg then return end
-
-    if cfg.role == "host" then
-      startHost()
-    elseif cfg.role == "client" then
-      startClient()
-    else
-      mod.log:warn("config.lua: role must be 'host' or 'client', got %s", tostring(cfg.role))
-      notify(("Gen1Coop:\nrole invalide\ndans config.lua:\n%s"):format(tostring(cfg.role)))
-    end
+  local function openConnectMenu()
+    if not game then return end
+    game.stack:push(Menu.new(game, {
+      { label = "HOST", onSelect = function() startHost() end },
+      { label = "JOIN", onSelect = function()
+          game.stack:push(NamingScreen.new(game, {
+            title = NAMING_TITLE,
+            maxLen = 15,
+            default = mod.save:get("last_ip", ""),
+            onDone = function(ip, confirmed)
+              if confirmed and ip ~= "" then startClient(ip) end
+            end,
+          }))
+        end },
+    }, { title = "GEN1COOP" }))
   end
+
+  -- scoped by title so this only swaps the grid for OUR naming screen,
+  -- never the player's actual name-entry / nickname screens
+  mod.hooks:on("ui.naming.grid", function(base, ctx)
+    if ctx.title == NAMING_TITLE then return IP_GRID end
+    return base
+  end)
+
+  mod.hooks:on("ui.start_menu.items", function(_, items)
+    items[#items + 1] = { label = "GEN1COOP", onSelect = openConnectMenu }
+    return items
+  end)
 
   -- non-blocking accept: keeps trying every step until a client shows up
   local function serviceHost()
@@ -191,16 +191,13 @@ return function(mod)
     end
   end
 
-  -- registered unconditionally, before any config/socket validation, so
-  -- a failure in init() still has somewhere to surface its notify()
   mod.events:on("game.ready", function(payload)
     game = payload and payload.game
-    init()
   end)
 
   mod.events:on("world.stepped", function(payload)
     flushNotify()
-    if cfg and cfg.role == "host" then
+    if isHost then
       serviceHost()
     end
     if state == "connected" then

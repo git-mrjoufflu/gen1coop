@@ -10,7 +10,36 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.5) built, awaiting real two-player test
+## Status: Step 1 (v0.0.6) built, awaiting real two-player test
+
+**v0.0.6 - confirmed: sockets work on both PC and the official Android
+build.** MrJoufflu's screenshot after v0.0.5 showed "en attente sur le
+port 51820..." on the Android device too - meaning `require("socket")`
+and `socket.bind()` both succeeded there, not just on Windows. The
+remaining blocker was just config: both devices had `role = "host"` in
+their hand-edited config.lua, so no client ever dialed in. Rather than
+tell MrJoufflu to hand-edit a text file on Android (impractical), moved
+the whole flow in-game: `config.lua` is gone. START menu > GEN1COOP >
+HOST or JOIN now. JOIN opens a numeric keypad for the host's IP, built by
+reusing `NamingScreen` (the same widget behind the actual player-naming
+screen) with a custom digits+dot grid, scoped to only this screen via a
+title match on the `ui.naming.grid` hook (`ctx.title == "IP DU HOST?"`) -
+confirmed via source (`NamingScreen:grid()`) that `ctx.title` is exactly
+what gets passed through, so the real name-entry screens are untouched.
+The START menu entry comes from the `ui.start_menu.items` hook. Last-used
+IP is remembered via `mod.save` so re-joining doesn't mean re-typing.
+
+Confirmed gen1recomp's official Android build is real:
+`mobile/ANDROID.md` + a full `mobile/android/` Gradle project exist in
+the repo - missed on the first pass because only `docs/` was checked,
+not `mobile/`. Also worth knowing: Android's networking for the built-in
+mod-index/mod-update feature goes through a *different*, narrower
+transport (`love.system.httpDownload` → a Java `HttpsURLConnection`
+bridge, since Android ships no `curl`) than desktop's `curl`-based one.
+That transport is unrelated to what this mod uses (raw `require("socket")`
+TCP, gated by the sandbox's `network` permission) - and the Android test
+result confirms raw sockets work fine for mods there too, independent of
+that separate mod-index-specific bridge.
 
 **v0.0.5 - real progress:** the v0.0.3 error-reporting fix worked exactly
 as intended - it surfaced a genuine bug instead of silence. MrJoufflu got

@@ -51,9 +51,9 @@ digits), since a relay address needs them.
 ## What this does
 
 - Everything is driven from an in-game menu: open the **START** menu,
-  select **GEN1COOP**, then **HOST** or **JOIN**. **MON NOM** sets your
-  display name (shown to everyone else in their **JOUEURS** list); it
-  defaults to "JOUEUR" if you never set one.
+  select **GEN1COOP**, then **HOST** or **JOIN**. **MY NAME** sets your
+  display name (shown to everyone else in their **PLAYERS** list); it
+  defaults to "PLAYER" if you never set one.
 - Every time a player takes a step, their map/x/y position is sent to
   whoever they're connected to (the LAN host, or the relay server),
   which forwards it to every other connected player.
@@ -80,16 +80,16 @@ digits), since a relay address needs them.
 3. On **every other player** (and, for internet play, yourself too):
    open START > GEN1COOP > JOIN, type the address on the keypad, confirm
    with the ED cell.
-4. Walk around on any side (the connection is only serviced on movement,
-   not every frame - so if nothing seems to happen, take a step). You
-   should see, LAN mode: host shows "joueur N connecte! (n/9)" per
-   player, each joiner shows "connecte a [ip]!"; internet mode: everyone
-   who joined shows "connecte a [relay address]!".
+4. Walk around on any side (outgoing position updates only send on
+   movement - so if nothing seems to happen, take a step). You should
+   see, LAN mode: host shows "player N connected! (n/9)" per player,
+   each joiner shows "connected to [ip]!"; internet mode: everyone
+   who joined shows "connected to [relay address]!".
 
 If nothing shows up at all after a few steps, the mod likely isn't
 installed/enabled correctly. If you get a specific error message, that's
 useful - it means the mod is running and something concrete went wrong
-(send a screenshot). A connection attempt that shows "connexion a
+(send a screenshot). A connection attempt that shows "connecting to
 [address]..." and then just sits there for 10+ seconds before erroring
 out is usually a problem outside the mod - for LAN, a firewall or WiFi
 client/AP isolation blocking device-to-device traffic (common on guest
@@ -101,7 +101,7 @@ still running and you copied the address correctly.
 
 - Other players show up as a small colored pixel-art marker on the map,
   not a real animated character sprite. Their name only shows in the
-  **JOUEURS** list, not floating over their marker in the world (the
+  **PLAYERS** list, not floating over their marker in the world (the
   engine doesn't expose the world-camera geometry mods would need to
   place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
 - Fixed default port (51820) for LAN hosting, not configurable in-game

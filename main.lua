@@ -60,6 +60,11 @@
 -- needed a real declared permission; this doesn't even have that door).
 -- JOUEURS already solves the actual ask ("se reconnaitre") without that risk.
 --
+-- v0.0.17: every player-visible string switched from French/joual to US
+-- English (menu labels, screen titles, textbox messages, color names) -
+-- this repo's working language stays French in comments/commit history,
+-- but the mod itself now reads in English.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -79,7 +84,7 @@ return function(mod)
   local PORT = 51820
   -- accepts a plain LAN IP or a "host:port" relay address - kept short,
   -- the naming screen's title bar has limited room
-  local NAMING_TITLE = "ADRESSE?"
+  local NAMING_TITLE = "ADDRESS?"
   -- host + up to this many clients. Star topology: every client only
   -- ever opens ONE connection (to the host), and the host relays each
   -- player's position to everyone else - not a full mesh, so this is
@@ -93,8 +98,8 @@ return function(mod)
   -- that script to change the palette (and re-run it; these are just
   -- the display names, the actual pixels live in the .png files).
   local PLAYER_COLOR_NAMES = {
-    [0] = "ROUGE", "BLEU", "VERT", "JAUNE", "MAUVE",
-    "ORANGE", "CYAN", "ROSE", "BRUN", "GRIS",
+    [0] = "RED", "BLUE", "GREEN", "YELLOW", "PURPLE",
+    "ORANGE", "CYAN", "PINK", "BROWN", "GRAY",
   }
 
   local function spriteIdFor(playerId)
@@ -129,8 +134,8 @@ return function(mod)
     { "lower case" },
   }
 
-  local NAME_TITLE = "TON NOM?"
-  local DEFAULT_NAME = "JOUEUR"
+  local NAME_TITLE = "YOUR NAME?"
+  local DEFAULT_NAME = "PLAYER"
   -- comma is the wire-protocol field separator - typed names can't ever
   -- contain one since NamingScreen only offers whatever's in the active
   -- grid, and this screen uses the vanilla alphabet grid (no
@@ -178,7 +183,7 @@ return function(mod)
     local ok, result = pcall(require, "socket")
     if not ok then
       mod.log:error("require('socket') failed: %s", tostring(result))
-      notify("Gen1Coop:\nreseau (socket)\nindisponible\nsur ce build.")
+      notify("Gen1Coop:\nnetwork (socket)\nunavailable\non this build.")
       return false
     end
     socket = result
@@ -232,7 +237,7 @@ return function(mod)
     if not s then
       mod.log:error("host bind on port %d failed: %s", PORT, tostring(err))
       state = "error"
-      notify(("Erreur: port\n%d pris ou\nbloque."):format(PORT))
+      notify(("Error: port\n%d taken or\nblocked."):format(PORT))
       return
     end
     s:settimeout(0)
@@ -242,9 +247,9 @@ return function(mod)
     mod.log:info("hosting on port %d (ip %s), waiting for a player to join...",
       PORT, tostring(ip))
     if ip then
-      notify(("Gen1Coop: IP\n%s\nport %d\nen attente..."):format(ip, PORT))
+      notify(("Gen1Coop: IP\n%s\nport %d\nwaiting..."):format(ip, PORT))
     else
-      notify(("Gen1Coop: en\nattente sur le\nport %d...\n(IP inconnue)"):format(PORT))
+      notify(("Gen1Coop:\nwaiting on\nport %d...\n(IP unknown)"):format(PORT))
     end
   end
 
@@ -291,19 +296,19 @@ return function(mod)
       state = "connected"
       mod.log:info("connected to %s:%d", host, port)
       mod.save:set("last_address", address)
-      notify(("Gen1Coop:\nconnecte a\n%s!"):format(wrapAddress(address)))
+      notify(("Gen1Coop:\nconnected to\n%s!"):format(wrapAddress(address)))
       return
     end
     if err ~= "timeout" and err ~= "Operation already in progress" then
       mod.log:error("could not connect to %s:%d - %s", host, port, tostring(err))
       state = "error"
-      notify(("Gen1Coop:\nconnexion a\n%s\nratee:\n%s"):format(wrapAddress(address), tostring(err)))
+      notify(("Gen1Coop:\nconnection to\n%s\nfailed:\n%s"):format(wrapAddress(address), tostring(err)))
       return
     end
     pendingConnect = { socket = s, address = address, host = host, port = port, startedAt = os.time() }
     state = "connecting"
     mod.log:info("connecting to %s:%d...", host, port)
-    notify(("Gen1Coop:\nconnexion a\n%s..."):format(wrapAddress(address)))
+    notify(("Gen1Coop:\nconnecting to\n%s..."):format(wrapAddress(address)))
   end
 
   -- a connect() that never resolves (never becomes writable, success or
@@ -323,7 +328,7 @@ return function(mod)
         "address, the relay server isn't actually running)",
         pendingConnect.host, pendingConnect.port, CONNECT_TIMEOUT_SECONDS)
       state = "error"
-      notify(("Gen1Coop:\n%s\nne repond pas.\nPare-feu ou\nserveur down?"):format(wrapAddress(pendingConnect.address)))
+      notify(("Gen1Coop:\n%s\nnot responding.\nFirewall or\nserver down?"):format(wrapAddress(pendingConnect.address)))
       s:close()
       pendingConnect = nil
       return
@@ -341,11 +346,11 @@ return function(mod)
       state = "connected"
       mod.log:info("connected to %s:%d", pendingConnect.host, pendingConnect.port)
       mod.save:set("last_address", pendingConnect.address)
-      notify(("Gen1Coop:\nconnecte a\n%s!"):format(wrapAddress(pendingConnect.address)))
+      notify(("Gen1Coop:\nconnected to\n%s!"):format(wrapAddress(pendingConnect.address)))
     else
       mod.log:error("connect to %s:%d failed (not established)", pendingConnect.host, pendingConnect.port)
       state = "error"
-      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(wrapAddress(pendingConnect.address)))
+      notify(("Gen1Coop:\nconnection to\n%s\nfailed."):format(wrapAddress(pendingConnect.address)))
       s:close()
     end
     pendingConnect = nil
@@ -371,7 +376,7 @@ return function(mod)
                   return -- B/cancel - normal back-out
                 end
                 if ip == "" then
-                  notify("Gen1Coop:\nIP vide,\nressaie.")
+                  notify("Gen1Coop:\nempty IP,\ntry again.")
                   return
                 end
                 startClient(ip)
@@ -380,11 +385,11 @@ return function(mod)
           end)
           if not ok then
             mod.log:error("failed to open naming screen: %s", tostring(err))
-            notify(("Gen1Coop:\nerreur clavier:\n%s"):format(wrapAddress(tostring(err))))
+            notify(("Gen1Coop:\nkeyboard error:\n%s"):format(wrapAddress(tostring(err))))
           end
         end },
-      { label = "JOUEURS", onSelect = function() showPlayerList() end },
-      { label = "MON NOM", onSelect = function()
+      { label = "PLAYERS", onSelect = function() showPlayerList() end },
+      { label = "MY NAME", onSelect = function()
           -- no title override here, so ui.naming.grid's hook (scoped to
           -- NAMING_TITLE/ADDRESS_GRID) doesn't touch this screen - it
           -- falls through to the vanilla alphabet grid, which is exactly
@@ -397,7 +402,7 @@ return function(mod)
             onDone = function(name, confirmed)
               if not confirmed or name == "" then return end
               mod.save:set("player_name", name)
-              notify(("Gen1Coop:\nton nom:\n%s"):format(name))
+              notify(("Gen1Coop:\nyour name:\n%s"):format(name))
             end,
           }))
         end },
@@ -508,7 +513,7 @@ return function(mod)
     local items = {}
     local selfId = isHost and 0 or nil -- a client doesn't know its own id
     if isHost then
-      items[#items + 1] = { label = "0 " .. localName() .. " (toe)" }
+      items[#items + 1] = { label = "0 " .. localName() .. " (you)" }
     end
     local ids = {}
     for id in pairs(remoteMarkers) do ids[#ids + 1] = id end
@@ -521,7 +526,7 @@ return function(mod)
       end
     end
     if #items == 0 then
-      items[#items + 1] = { label = "Personne encore" }
+      items[#items + 1] = { label = "Nobody yet" }
     end
     game.stack:push(ListMenu.new(game, "GEN1COOP", items, {
       onChoose = function() end,
@@ -541,7 +546,7 @@ return function(mod)
       nextPeerId = nextPeerId + 1
       table.insert(peers, { socket = s, id = id })
       mod.log:info("player %d joined (%d/%d)", id, #peers, MAX_PLAYERS - 1)
-      notify(("Gen1Coop:\njoueur %d (%s)\nconnecte!\n(%d/%d)"):format(
+      notify(("Gen1Coop:\nplayer %d (%s)\nconnected!\n(%d/%d)"):format(
         id, PLAYER_COLOR_NAMES[id] or "?", #peers, MAX_PLAYERS - 1))
     end
   end
@@ -597,7 +602,7 @@ return function(mod)
     for i = #dead, 1, -1 do
       local p = peers[dead[i]]
       local name = remoteNames[p.id] or PLAYER_COLOR_NAMES[p.id] or "?"
-      notify(("Gen1Coop:\n%s\ndeconnecte."):format(name))
+      notify(("Gen1Coop:\n%s\ndisconnected."):format(name))
       removeMarker(p.id)
       table.remove(peers, dead[i])
     end
@@ -614,7 +619,7 @@ return function(mod)
       mod.log:warn("send failed: %s - peer likely disconnected", tostring(err))
       peer = nil
       state = "error"
-      notify("Gen1Coop:\nconnexion perdue.")
+      notify("Gen1Coop:\nconnection lost.")
     end
   end
 

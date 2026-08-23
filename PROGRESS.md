@@ -10,6 +10,30 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.17: all in-game text switched to US English
+
+MrJoufflu's ask: "il faut que les texte du mod soit en anglais USA" - every
+player-visible string had been French/joual since v0.0.1 (this repo's
+default working language), but the mod itself should read in English.
+Translated everything shown to a player: the `ADRESSE?`/`TON NOM?` naming
+screen titles (-> `ADDRESS?`/`YOUR NAME?`), the `JOUEURS`/`MON NOM` start
+menu items (-> `PLAYERS`/`MY NAME`), the `DEFAULT_NAME` fallback (`JOUEUR`
+-> `PLAYER`), the ten `PLAYER_COLOR_NAMES` (ROUGE/BLEU/VERT/JAUNE/MAUVE/
+ORANGE/CYAN/ROSE/BRUN/GRIS -> RED/BLUE/GREEN/YELLOW/PURPLE/ORANGE/CYAN/
+PINK/BROWN/GRAY), and every `notify()` textbox (connecting/connected/
+disconnected/error messages, the empty-IP and keyboard-error messages,
+the "(you)"/"Nobody yet" JOUEURS-list entries). `manifest.json`'s
+description and `README.md` updated to match the new menu labels (both
+were already written in English prose, just referencing the old French
+labels in a couple of spots). Re-checked every translated textbox string
+against the ~18-safe-char-per-line budget (see `wrapAddress()`'s comment)
+since English wording runs different lengths than the French it replaced
+- worst case is a color name in a JOUEURS/notify line
+(`YELLOW`/`PURPLE`/`ORANGE`/`BROWN`, all 6 chars, same ballpark as the
+French set's longest entries) so nothing needed re-wrapping. Source code
+comments and this file's own history are left as-is - not player-facing,
+and rewriting past entries would erase the actual development record.
+
 ## v0.0.16: real sprites + player names - not yet tested
 
 MrJoufflu's ask after confirming v0.0.15 worked: "la ça prend des vrai

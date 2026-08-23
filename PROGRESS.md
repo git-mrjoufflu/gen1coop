@@ -10,8 +10,35 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.10) built - likely network-level blocker found,
-not a mod bug
+## Status: Step 1 CONFIRMED WORKING (v0.0.10)
+
+Real two-device test, PC + the official Android build, over LAN: host
+showed "un joueur s'est connecte!", client showed "connecte a [ip]!".
+Whatever was blocking the connection before v0.0.10 resolved itself
+(network-side, per the ping/firewall/isolation diagnostic suggested in
+that release - not confirmed which one it was, but it stopped being a
+problem). This is the real milestone: the core networking layer works
+end to end across two real devices on two different platforms, not just
+in theory. Position sync (`mapId,x,y` on every `world.stepped`) has been
+running under the hood since v0.0.1 and should now actually be flowing
+between the two connected peers, though nothing renders it yet - that's
+step 2.
+
+## Next: Step 2 - visible remote player
+
+Not started. Plan (from the original roadmap): spawn a placeholder
+sprite at the peer's last reported position, shown/hidden based on
+whether both players currently share a `mapId`. Open question carried
+over from the start of this project and still unresolved: gen1recomp's
+sanctioned mod API has no obvious "spawn an NPC at runtime" surface (the
+`maps` registry's `objects` field is static map data merged at load
+time, not a live spawn call) - Gen1Online reached directly into
+`src.world.NPC` and `src.render.SpriteRenderer` for this, bypassing the
+mod sandbox the same way this project had to for networking. Needs the
+same kind of source-reading pass that found `mod.hooks:wrap`,
+`ui.start_menu.items`, and the `network` permission - check whether
+there's a real spawn API before assuming another sandbox reach-around is
+required.
 
 **v0.0.10:** v0.0.9's non-blocking connect worked as designed - MrJoufflu
 saw "connexion a 192.168.2.65..." appear instantly (phone hosting, PC

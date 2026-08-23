@@ -1,9 +1,10 @@
 {
   "id": "gen1coop",
   "name": "Gen1 Co-op (prototype)",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "github": "git-mrjoufflu/gen1coop",
   "api": 2,
+  "permissions": ["network"],
   "entry": "main.lua",
   "profile": "content",
   "game_version": ">=0.0.0-dev",

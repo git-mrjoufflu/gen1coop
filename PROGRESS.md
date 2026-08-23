@@ -10,7 +10,26 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
-## Status: Step 1 (v0.0.4) built, awaiting real two-player test
+## Status: Step 1 (v0.0.5) built, awaiting real two-player test
+
+**v0.0.5 - real progress:** the v0.0.3 error-reporting fix worked exactly
+as intended - it surfaced a genuine bug instead of silence. MrJoufflu got
+"reseau (socket) indisponible sur ce build." in a textbox. Root cause
+found in `src/mods/Sandbox.lua`: mods run in a real permission-gated
+sandbox, and `require("socket")` (along with enet/http/https/ssl/mime/
+ltn12) is denied unless the manifest declares `permissions: ["network"]`
+(`Sandbox.moduleDenial`, checked against `manifest.permissionSet`). This
+completely reverses the "no sanctioned path for networking" conclusion
+from earlier research - that was based on the mod-facing `mod` table not
+having a `net` field, but never checked for a permission system gating
+raw `require()` itself. Full valid permission set, from
+`src/mods/Manifest.lua`: `network`, `filesystem`, `engine_internals`,
+`steps`, `background`, `compute`. `love.thread` separately needs
+`compute` (not used here - the current code polls sockets synchronously
+from `world.stepped`, no threading). Added `"permissions": ["network"]`
+to manifest.json. Not yet confirmed whether this alone fixes it, or
+whether declaring the permission also requires a player-facing consent
+prompt somewhere in the mod manager UI that hasn't been checked yet.
 
 **v0.0.4:** added `"github": "git-mrjoufflu/gen1coop"` to manifest.json
 so gen1recomp's in-game mod manager can check for updates itself (same

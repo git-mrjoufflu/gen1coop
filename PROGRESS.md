@@ -10,6 +10,43 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.18: real ROM sprites instead of invented pixel art
+
+MrJoufflu's ask: "je veux les les meme sprite que l'original pas un
+sprite inventer" (I want the same sprites as the original, not an
+invented sprite) - rejecting v0.0.16's hand-drawn pixel-art person.
+
+Found that this is actually straightforward and *better* than the
+custom-art approach: gen1recomp's NPCs are rendered from `data.sprites`,
+a table keyed by sprite id strings extracted straight from the player's
+own ROM at import time (`src/import/RomExtractor.lua`). Confirmed the
+local player's own walking sprite is loaded under exactly `"SPRITE_RED"`
+(`src/world/FieldDefaults.lua`'s `PLAYER_SPRITES.walk = "SPRITE_RED"`,
+read by `src/world/Player.lua`), and that `mod.world:spawnNpc`'s
+`objDef.sprite` accepts any of these ids directly - confirmed via
+`tests/mod_world_tests.lua`'s own spawnNpc calls (`{ sprite =
+"SPRITE_OAK", ... }`) and `tools/rom_manifest.json`'s full sprite id
+list. So no custom asset, no `mod.content.sprites:register` call, and no
+`trueColor` opt-out needed at all - these sprites render through the
+game's normal DMG palette pipeline exactly like every other NPC, which
+*is* "the same as the original" in the most literal sense.
+
+- Deleted `assets/sprites/` entirely (the v0.0.15/v0.0.16 hand-drawn
+  markers and their generator script).
+- `PLAYER_SPRITES[id]`: `SPRITE_RED` (id 0, host - literally the
+  player's own sprite), `SPRITE_BLUE` (id 1 - the rival's sprite), then
+  `SPRITE_GIRL`/`SPRITE_HIKER`/`SPRITE_BIKER`/`SPRITE_SAILOR`/
+  `SPRITE_FISHER`/`SPRITE_NURSE`/`SPRITE_GRANNY`/`SPRITE_ROCKET` for ids
+  2-9 - common recurring trainer-class NPCs, picked over unique story
+  characters (Oak, Giovanni, the Elite Four) so another player reads as
+  "some trainer," not as a specific game character.
+- `PLAYER_LABELS[id]`: a short (<=6 char) display name per id, mirroring
+  `PLAYER_SPRITES` 1:1, used as the JOUEURS/notify fallback wherever a
+  player hasn't set (or the game hasn't yet received) their MY NAME -
+  same role `PLAYER_COLOR_NAMES` played before, just renamed since
+  "color" no longer means anything here.
+- Not yet tested in a real game - same caveat as always.
+
 ## v0.0.17: all in-game text switched to US English
 
 MrJoufflu's ask: "il faut que les texte du mod soit en anglais USA" - every

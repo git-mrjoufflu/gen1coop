@@ -99,11 +99,14 @@ still running and you copied the address correctly.
 
 ## Known limitations (on purpose, for this first step)
 
-- Other players show up as a small colored pixel-art marker on the map,
-  not a real animated character sprite. Their name only shows in the
-  **PLAYERS** list, not floating over their marker in the world (the
-  engine doesn't expose the world-camera geometry mods would need to
-  place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
+- Other players show up using real overworld sprites from the game
+  itself (Red for the host, the rival, and a handful of common trainer
+  NPCs for everyone else) rather than a custom-drawn marker - but it's a
+  static NPC, not a real second character: it always faces down and
+  teleports to each update instead of walking smoothly. Their name only
+  shows in the **PLAYERS** list, not floating over their marker in the
+  world (the engine doesn't expose the world-camera geometry mods would
+  need to place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
 - Fixed default port (51820) for LAN hosting, not configurable in-game
   (yet). Relay addresses can use any port, since they're typed in full.
 - LAN star topology: if the host quits, everyone's connection drops (the
@@ -125,7 +128,6 @@ still running and you copied the address correctly.
 ## Next steps (not built yet)
 
 Smooth marker movement (interpolation instead of teleporting between
-updates) and facing direction; a real animated character sprite instead
-of a flat pixel-art marker; internet/relay play confirmed with real
+updates) and facing direction; internet/relay play confirmed with real
 people (still only LAN-tested); more than 2-3 simultaneous players
 confirmed.

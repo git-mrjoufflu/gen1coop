@@ -65,6 +65,18 @@
 -- this repo's working language stays French in comments/commit history,
 -- but the mod itself now reads in English.
 --
+-- v0.0.18: MrJoufflu didn't want an invented sprite - "les meme sprite
+-- que l'original" (the same sprites as the original, not made-up ones).
+-- Dropped assets/sprites/ (the hand-drawn pixel-art person) entirely and
+-- switched each player marker to a real ROM-extracted overworld sprite
+-- id (PLAYER_SPRITES: SPRITE_RED/SPRITE_BLUE/etc.) - the exact graphics
+-- the game itself uses for the player and its NPCs, confirmed via
+-- src/world/FieldDefaults.lua's PLAYER_SPRITES.walk = "SPRITE_RED" (the
+-- local player's own sprite id) and tests/mod_world_tests.lua's spawnNpc
+-- calls with real SPRITE_* ids. No custom art and no
+-- mod.content.sprites:register needed at all - data.sprites already has
+-- these seeded by RomExtractor at import time, same as any vanilla NPC.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -94,26 +106,35 @@ return function(mod)
   local MAX_PLAYERS = 10
 
   -- id 0 is always the host; 1..9 are joiners in the order nextPeerId
-  -- hands them out. Matches assets/sprites/generate_sprites.py exactly - see
-  -- that script to change the palette (and re-run it; these are just
-  -- the display names, the actual pixels live in the .png files).
-  local PLAYER_COLOR_NAMES = {
-    [0] = "RED", "BLUE", "GREEN", "YELLOW", "PURPLE",
-    "ORANGE", "CYAN", "PINK", "BROWN", "GRAY",
+  -- hands them out. Each id gets a real, ROM-extracted overworld sprite -
+  -- the same graphics the game itself uses for the player and its NPCs
+  -- (data.sprites, seeded by RomExtractor at import time - see
+  -- src/world/FieldDefaults.lua's PLAYER_SPRITES.walk = "SPRITE_RED" for
+  -- the exact id the local player's own sprite is loaded under, and
+  -- tests/mod_world_tests.lua's spawnNpc calls for confirmation that any
+  -- SPRITE_* id from the ROM is valid there). No custom art, no
+  -- mod.content.sprites:register needed at all - data.sprites already
+  -- has these keyed and ready, the same way every vanilla NPC gets its
+  -- sprite. SPRITE_BLUE is the rival's own sprite; the rest are common
+  -- recurring trainer-class NPCs (Hiker, Biker, Sailor, Fisher, Nurse,
+  -- Granny, Rocket grunt) - real character graphics, not story-unique
+  -- ones like Oak or the Elite Four, to keep other players reading as
+  -- "some trainer" rather than "the game's villain."
+  local PLAYER_SPRITES = {
+    [0] = "SPRITE_RED", "SPRITE_BLUE", "SPRITE_GIRL", "SPRITE_HIKER",
+    "SPRITE_BIKER", "SPRITE_SAILOR", "SPRITE_FISHER", "SPRITE_NURSE",
+    "SPRITE_GRANNY", "SPRITE_ROCKET",
+  }
+
+  -- short fallback label per id, shown in JOUEURS/notify messages until a
+  -- player's own MY NAME is known - mirrors PLAYER_SPRITES 1:1
+  local PLAYER_LABELS = {
+    [0] = "RED", "BLUE", "GIRL", "HIKER", "BIKER",
+    "SAILOR", "FISHER", "NURSE", "GRANNY", "ROCKET",
   }
 
   local function spriteIdFor(playerId)
-    return "gen1coop_p" .. tostring(playerId)
-  end
-
-  local function registerMarkerSprites()
-    for id = 0, 9 do
-      mod.content.sprites:register(spriteIdFor(id), {
-        image = mod.assets:path(("assets/sprites/player_%d.png"):format(id)),
-        frames = 1,
-        trueColor = true,
-      })
-    end
+    return PLAYER_SPRITES[playerId]
   end
 
   -- keypad grid for the JOIN screen - covers both a plain LAN IP
@@ -147,7 +168,7 @@ return function(mod)
   local game = nil -- captured from game.ready; needed to push any UI
   -- forward-declared: openConnectMenu's JOUEURS item references these
   -- before their real bodies are defined further down (need
-  -- remoteMarkers/remoteNames, which need PLAYER_COLOR_NAMES et al. to
+  -- remoteMarkers/remoteNames, which need PLAYER_LABELS et al. to
   -- exist first) - Lua resolves an undeclared name as a global, not "not
   -- yet assigned", so the `local` here has to come before anything that
   -- reads it, even though the assignment comes later
@@ -520,9 +541,9 @@ return function(mod)
     table.sort(ids)
     for _, id in ipairs(ids) do
       if id ~= selfId then
-        local color = PLAYER_COLOR_NAMES[id] or "?"
-        local name = remoteNames[id] or color
-        items[#items + 1] = { label = ("%d %s (%s)"):format(id, name, color) }
+        local fallback = PLAYER_LABELS[id] or "?"
+        local name = remoteNames[id] or fallback
+        items[#items + 1] = { label = ("%d %s (%s)"):format(id, name, fallback) }
       end
     end
     if #items == 0 then
@@ -547,7 +568,7 @@ return function(mod)
       table.insert(peers, { socket = s, id = id })
       mod.log:info("player %d joined (%d/%d)", id, #peers, MAX_PLAYERS - 1)
       notify(("Gen1Coop:\nplayer %d (%s)\nconnected!\n(%d/%d)"):format(
-        id, PLAYER_COLOR_NAMES[id] or "?", #peers, MAX_PLAYERS - 1))
+        id, PLAYER_LABELS[id] or "?", #peers, MAX_PLAYERS - 1))
     end
   end
 
@@ -601,7 +622,7 @@ return function(mod)
     end
     for i = #dead, 1, -1 do
       local p = peers[dead[i]]
-      local name = remoteNames[p.id] or PLAYER_COLOR_NAMES[p.id] or "?"
+      local name = remoteNames[p.id] or PLAYER_LABELS[p.id] or "?"
       notify(("Gen1Coop:\n%s\ndisconnected."):format(name))
       removeMarker(p.id)
       table.remove(peers, dead[i])
@@ -694,8 +715,4 @@ return function(mod)
     resyncMarkers()
   end)
 
-  -- content registries merge before the game boots, same as
-  -- translation-qc's font/text registration - no need to wait for
-  -- game.ready for this part
-  registerMarkerSprites()
 end

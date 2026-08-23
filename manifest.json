@@ -1,7 +1,7 @@
 {
   "id": "gen1coop",
   "name": "Gen1 Co-op (prototype)",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "github": "git-mrjoufflu/gen1coop",
   "api": 2,
   "permissions": ["network"],
@@ -13,5 +13,5 @@
   "dependencies": [],
   "optional_dependencies": [],
   "conflicts": [],
-  "description": "Experimental overworld co-op prototype for up to 10 players, LAN or internet. Fully in-game menu: START > GEN1COOP > HOST (LAN) or JOIN (a LAN IP, or a relay_server.py address for internet play with viewers/friends - no VPN or port forwarding needed), MY NAME (set your display name) or PLAYERS (see who's connected, their name and color). Other connected players show up as colored pixel-art markers on the map while you share their location; each player has a fixed color (see assets/sprites/)."
+  "description": "Experimental overworld co-op prototype for up to 10 players, LAN or internet. Fully in-game menu: START > GEN1COOP > HOST (LAN) or JOIN (a LAN IP, or a relay_server.py address for internet play with viewers/friends - no VPN or port forwarding needed), MY NAME (set your display name) or PLAYERS (see who's connected and their name). Other connected players show up using real overworld sprites from the game itself (Red, Blue, and common trainer NPCs) - no custom art."
 }

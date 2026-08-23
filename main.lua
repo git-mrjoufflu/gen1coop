@@ -19,8 +19,16 @@
 -- process is doing double duty as the relay, so if the host quits,
 -- everyone's connection drops.
 --
+-- v0.0.12: the JOIN screen now also accepts a "host:port" address, not
+-- just a bare LAN IP - for connecting through relay_server.py (a
+-- standalone script, not part of this mod, that everyone including the
+-- would-be "host" connects OUT to over the internet - see that file's
+-- docstring for deployment via ngrok, no VPN/port-forwarding needed on
+-- any player's end). LAN hosting (this file's HOST option) still works
+-- exactly as before for same-network play with no internet dependency.
+--
 -- Known rough edges, on purpose for a first slice:
--- - LAN/port-forward only, no dedicated relay server. Fixed port 51820.
+-- - Fixed default port 51820 for LAN hosting.
 -- - Polling only happens on world.stepped (the local player has to move
 --   for sockets to be serviced), not every frame.
 -- - No reconnect handling if a connection drops.
@@ -34,7 +42,9 @@ return function(mod)
   local NamingScreen = require("src.ui.NamingScreen")
 
   local PORT = 51820
-  local NAMING_TITLE = "IP DU HOST?"
+  -- accepts a plain LAN IP or a "host:port" relay address - kept short,
+  -- the naming screen's title bar has limited room
+  local NAMING_TITLE = "ADRESSE?"
   -- host + up to this many clients. Star topology: every client only
   -- ever opens ONE connection (to the host), and the host relays each
   -- player's position to everyone else - not a full mesh, so this is
@@ -43,17 +53,21 @@ return function(mod)
   -- everyone to know everyone else's IP.
   local MAX_PLAYERS = 10
 
-  -- numeric keypad grid for IP entry - NamingScreen requires an "ED"
-  -- confirm cell and a trailing single-cell case-switch row to keep its
-  -- own confirm/case-flip logic working (see findMeta in NamingScreen.lua),
-  -- even though case doesn't mean anything for digits; both are inert
-  -- filler here.
-  local IP_GRID = {
+  -- keypad grid for the JOIN screen - covers both a plain LAN IP
+  -- ("192.168.1.5") and a "host:port" relay address ("0.tcp.ngrok.io:
+  -- 14589", see relay_server.py), so it needs letters too, not just
+  -- digits+dot. One page only (DNS names are case-insensitive, so
+  -- there's no real need for lower/upper here) - single case, no
+  -- second page to build. NamingScreen requires an "ED" confirm cell
+  -- and a trailing single-cell case-switch row to keep its own
+  -- confirm/case-flip logic working (see findMeta in NamingScreen.lua);
+  -- the case row is inert filler here since there's only one page.
+  local ADDRESS_GRID = {
+    { "A", "B", "C", "D", "E", "F", "G", "H", "I" },
+    { "J", "K", "L", "M", "N", "O", "P", "Q", "R" },
+    { "S", "T", "U", "V", "W", "X", "Y", "Z", "." },
     { "1", "2", "3", "4", "5", "6", "7", "8", "9" },
-    { "0", ".", "ED", " ", " ", " ", " ", " ", " " },
-    { " ", " ", " ", " ", " ", " ", " ", " ", " " },
-    { " ", " ", " ", " ", " ", " ", " ", " ", " " },
-    { " ", " ", " ", " ", " ", " ", " ", " ", " " },
+    { "0", ":", "ED", " ", " ", " ", " ", " ", " " },
     { "lower case" },
   }
 
@@ -159,6 +173,26 @@ return function(mod)
     end
   end
 
+  -- textbox lines cap out around 18 safe characters (see translation-qc,
+  -- the sister project, for the many bugs that came from ignoring this);
+  -- a "host:port" relay address can easily run past that
+  -- ("0.tcp.ngrok.io:14589" is 21) where a plain LAN IP mostly wouldn't,
+  -- so wrap anything long across two lines instead of assuming it fits.
+  local function wrapAddress(addr)
+    if #addr <= 18 then return addr end
+    local mid = math.ceil(#addr / 2)
+    return addr:sub(1, mid) .. "\n" .. addr:sub(mid + 1)
+  end
+
+  -- accepts a plain LAN IP ("192.168.1.5", uses the default PORT) or a
+  -- "host:port" relay address (relay_server.py's public address via
+  -- ngrok or similar - see that file's docstring)
+  local function parseAddress(input)
+    local host, portStr = input:match("^([^:]+):(%d+)$")
+    if host then return host, tonumber(portStr) end
+    return input, PORT
+  end
+
   -- socket mid-connect, or nil once resolved either way
   local pendingConnect = nil
 
@@ -169,31 +203,32 @@ return function(mod)
   -- on a timeout-0 socket returns immediately with "timeout" while the
   -- OS handshake is still in flight (that's success-so-far, not an
   -- error); pollConnect() (called from world.stepped) checks completion.
-  local function startClient(ip)
+  local function startClient(address)
     if not ensureSocket() then return end
     isHost = false
+    local host, port = parseAddress(address)
     local s = socket.tcp()
     s:settimeout(0)
-    local ok, err = s:connect(ip, PORT)
+    local ok, err = s:connect(host, port)
     if ok then
       -- rare, but possible for a same-machine test: connected instantly
       peer = s
       state = "connected"
-      mod.log:info("connected to host %s:%d", ip, PORT)
-      mod.save:set("last_ip", ip)
-      notify(("Gen1Coop:\nconnecte a\n%s!"):format(ip))
+      mod.log:info("connected to %s:%d", host, port)
+      mod.save:set("last_address", address)
+      notify(("Gen1Coop:\nconnecte a\n%s!"):format(wrapAddress(address)))
       return
     end
     if err ~= "timeout" and err ~= "Operation already in progress" then
-      mod.log:error("could not connect to %s:%d - %s", ip, PORT, tostring(err))
+      mod.log:error("could not connect to %s:%d - %s", host, port, tostring(err))
       state = "error"
-      notify(("Gen1Coop:\nconnexion a\n%s\nratee:\n%s"):format(ip, tostring(err)))
+      notify(("Gen1Coop:\nconnexion a\n%s\nratee:\n%s"):format(wrapAddress(address), tostring(err)))
       return
     end
-    pendingConnect = { socket = s, ip = ip, startedAt = os.time() }
+    pendingConnect = { socket = s, address = address, host = host, port = port, startedAt = os.time() }
     state = "connecting"
-    mod.log:info("connecting to %s:%d...", ip, PORT)
-    notify(("Gen1Coop:\nconnexion a\n%s..."):format(ip))
+    mod.log:info("connecting to %s:%d...", host, port)
+    notify(("Gen1Coop:\nconnexion a\n%s..."):format(wrapAddress(address)))
   end
 
   -- a connect() that never resolves (never becomes writable, success or
@@ -209,10 +244,11 @@ return function(mod)
     local s = pendingConnect.socket
     if os.time() - pendingConnect.startedAt > CONNECT_TIMEOUT_SECONDS then
       mod.log:error("connect to %s:%d timed out after %ds - never became " ..
-        "writable, likely a firewall or WiFi client isolation silently " ..
-        "dropping it", pendingConnect.ip, PORT, CONNECT_TIMEOUT_SECONDS)
+        "writable, likely a firewall/router blocking it (or, for a relay " ..
+        "address, the relay server isn't actually running)",
+        pendingConnect.host, pendingConnect.port, CONNECT_TIMEOUT_SECONDS)
       state = "error"
-      notify(("Gen1Coop:\n%s\nne repond pas.\nPare-feu ou\nisolation WiFi?"):format(pendingConnect.ip))
+      notify(("Gen1Coop:\n%s\nne repond pas.\nPare-feu ou\nserveur down?"):format(wrapAddress(pendingConnect.address)))
       s:close()
       pendingConnect = nil
       return
@@ -228,13 +264,13 @@ return function(mod)
     if peername then
       peer = s
       state = "connected"
-      mod.log:info("connected to host %s:%d", pendingConnect.ip, PORT)
-      mod.save:set("last_ip", pendingConnect.ip)
-      notify(("Gen1Coop:\nconnecte a\n%s!"):format(pendingConnect.ip))
+      mod.log:info("connected to %s:%d", pendingConnect.host, pendingConnect.port)
+      mod.save:set("last_address", pendingConnect.address)
+      notify(("Gen1Coop:\nconnecte a\n%s!"):format(wrapAddress(pendingConnect.address)))
     else
-      mod.log:error("connect to %s:%d failed (not established)", pendingConnect.ip, PORT)
+      mod.log:error("connect to %s:%d failed (not established)", pendingConnect.host, pendingConnect.port)
       state = "error"
-      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(pendingConnect.ip))
+      notify(("Gen1Coop:\nconnexion a\n%s\nratee."):format(wrapAddress(pendingConnect.address)))
       s:close()
     end
     pendingConnect = nil
@@ -248,7 +284,7 @@ return function(mod)
           game.stack:push(NamingScreen.new(game, {
             title = NAMING_TITLE,
             maxLen = 15,
-            default = mod.save:get("last_ip", ""),
+            default = mod.save:get("last_address", ""),
             onDone = function(ip, confirmed)
               mod.log:info("naming onDone: ip=%s confirmed=%s", tostring(ip), tostring(confirmed))
               if not confirmed then
@@ -273,7 +309,7 @@ return function(mod)
   -- scoped by title so this only swaps the grid for OUR naming screen,
   -- never the player's actual name-entry / nickname screens
   mod.hooks:wrap("ui.naming.grid", function(next, base, ctx)
-    if ctx.title == NAMING_TITLE then return IP_GRID end
+    if ctx.title == NAMING_TITLE then return ADDRESS_GRID end
     return next(base, ctx)
   end)
 

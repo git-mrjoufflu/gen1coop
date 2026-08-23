@@ -73,6 +73,49 @@ paths, not yet decided between:
    actual internet play - deliberately deferred" - still true, this
    would be un-deferring it.
 
+**MrJoufflu picked option 2 (relay server) directly**, skipping the
+port-forwarding stopgap - built in v0.0.12.
+
+## v0.0.12: relay server for internet play, not yet tested with real people
+
+- `relay_server.py` (new file, standalone Python, NOT part of the
+  gen1recomp mod - a separate process someone runs and exposes via
+  ngrok or similar): implements the exact same wire protocol as
+  `hostRelay()` in `main.lua` (client sends untagged `mapId,x,y`,
+  server relays tagged `id,mapId,x,y` to everyone else), using Python's
+  `selectors` module for non-blocking I/O across N connections. Verified
+  correct locally with a two-socket test script (sent from one, checked
+  the other received the right tagged line, both directions) - this is
+  the one piece of this whole project actually testable without a real
+  gen1recomp instance, since it's plain Python.
+- Chose ngrok's free TCP tunnel for deployment over a paid VPS or a
+  Cloudflare Tunnel: Cloudflare's free "quick tunnels" are HTTP(S)-only
+  (fine for Gen1Online's GTS, which is a REST API, but this relay is raw
+  TCP), and ngrok's `ngrok tcp <port>` free tier gives a public
+  `host:port` TCP endpoint with nothing to buy and nothing to configure
+  on a router.
+- Mod-side (`main.lua`): the JOIN screen now accepts `"host:port"` (a
+  relay address) as well as a bare LAN IP - `parseAddress()` splits on
+  `:`, falling back to the default port 51820 for a plain IP so old
+  behavior is unchanged. Client-side connect/relay code
+  (`startClient`/`pollConnect`/`sendPosition`/`receivePositions`) needed
+  no logic changes at all beyond this - from a client's perspective,
+  "connected to a LAN host" and "connected to the relay" are identical,
+  by design.
+- `ADDRESS_GRID` replaces the old digits-only `IP_GRID`: a relay address
+  like `0.tcp.ngrok.io:14589` needs letters, not just digits+dot+colon.
+  One case only (DNS is case-insensitive), so no second grid page to
+  build.
+- New `wrapAddress()` helper: a `host:port` string can run well past the
+  ~18-char safe textbox width a bare LAN IP mostly wouldn't
+  (`0.tcp.ngrok.io:14589` is 21 chars) - learned from translation-qc's
+  many overflow bugs to wrap this proactively instead of waiting for a
+  screenshot to prove it broke.
+- Not yet tested: no real ngrok tunnel has been stood up and joined from
+  a second device. The relay server's *protocol* is verified correct in
+  isolation; the *mod's* relay-address handling is not yet verified in
+  a real game.
+
 ## Step 2 (unstarted): visible remote player
 
 Plan (from the original roadmap): spawn a placeholder sprite per

@@ -27,18 +27,34 @@
 -- any player's end). LAN hosting (this file's HOST option) still works
 -- exactly as before for same-network play with no internet dependency.
 --
+-- v0.0.14: connection polling moved off world.stepped onto input.step
+-- (see that hook's wiring below) - a joining player who confirmed an
+-- address and then stood still never saw their own connection succeed,
+-- since nothing was polling for it until they moved.
+--
+-- v0.0.15: visible player markers. mod.world:spawnNpc/removeNpc
+-- (src/world/WorldAPI.lua) turned out to be a real, documented mod API
+-- for exactly this ("scripted and dynamic actors the mod re-spawns on
+-- map.entered") - no sandbox reach-around needed here, unlike
+-- networking. Each player gets a fixed color (assets/sprites/, one
+-- trueColor 16x16 marker per id) shown only while they share the local
+-- player's current map; START > GEN1COOP > JOUEURS lists who's known
+-- and their color at any time.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
--- - Polling only happens on world.stepped (the local player has to move
---   for sockets to be serviced), not every frame.
 -- - No reconnect handling if a connection drops.
 -- - Needs the "network" permission (declared in manifest.json) - mods
 --   run in a real sandbox (src/mods/Sandbox.lua) that denies
 --   require("socket") without it.
+-- - Markers teleport to each update rather than walking smoothly (no
+--   interpolation yet), and always face down (no direction inference
+--   from movement yet either).
 
 return function(mod)
   local TextBox = require("src.render.TextBox")
   local Menu = require("src.ui.Menu")
+  local ListMenu = require("src.ui.ListMenu")
   local NamingScreen = require("src.ui.NamingScreen")
 
   local PORT = 51820
@@ -52,6 +68,29 @@ return function(mod)
   -- separate server. Simplest way to get N players without asking
   -- everyone to know everyone else's IP.
   local MAX_PLAYERS = 10
+
+  -- id 0 is always the host; 1..9 are joiners in the order nextPeerId
+  -- hands them out. Matches assets/sprites/generate_sprites.py exactly - see
+  -- that script to change the palette (and re-run it; these are just
+  -- the display names, the actual pixels live in the .png files).
+  local PLAYER_COLOR_NAMES = {
+    [0] = "ROUGE", "BLEU", "VERT", "JAUNE", "MAUVE",
+    "ORANGE", "CYAN", "ROSE", "BRUN", "GRIS",
+  }
+
+  local function spriteIdFor(playerId)
+    return "gen1coop_p" .. tostring(playerId)
+  end
+
+  local function registerMarkerSprites()
+    for id = 0, 9 do
+      mod.content.sprites:register(spriteIdFor(id), {
+        image = mod.assets:path(("assets/sprites/player_%d.png"):format(id)),
+        frames = 1,
+        trueColor = true,
+      })
+    end
+  end
 
   -- keypad grid for the JOIN screen - covers both a plain LAN IP
   -- ("192.168.1.5") and a "host:port" relay address ("0.tcp.ngrok.io:
@@ -72,6 +111,13 @@ return function(mod)
   }
 
   local game = nil -- captured from game.ready; needed to push any UI
+  -- forward-declared: openConnectMenu's JOUEURS item references this
+  -- before its real body is defined further down (needs remoteMarkers,
+  -- which needs PLAYER_COLOR_NAMES et al. to exist first) - Lua resolves
+  -- an undeclared name as a global, not "not yet assigned", so the
+  -- `local` here has to come before anything that reads it, even though
+  -- the assignment comes later
+  local showPlayerList
 
   -- game.ready can fire before the player is actually in control (title
   -- screen, save select, intro) - pushing a textbox right then is
@@ -281,15 +327,16 @@ return function(mod)
     game.stack:push(Menu.new(game, {
       { label = "HOST", onSelect = function() startHost() end },
       { label = "JOIN", onSelect = function()
-          notify("Gen1Coop:\nouverture du\nclavier...")
+          -- construction wrapped in pcall (not just for show - this is
+          -- how v0.0.13 tracked down the input.step bug): a runtime
+          -- error here would otherwise fail silently instead of showing
+          -- "erreur clavier"
           local ok, err = pcall(function()
             game.stack:push(NamingScreen.new(game, {
               title = NAMING_TITLE,
               maxLen = 15,
               default = mod.save:get("last_address", ""),
               onDone = function(ip, confirmed)
-                notify(("Gen1Coop:\nonDone recu\nip=%s\nconfirme=%s"):format(
-                  wrapAddress(tostring(ip)), tostring(confirmed)))
                 mod.log:info("naming onDone: ip=%s confirmed=%s", tostring(ip), tostring(confirmed))
                 if not confirmed then
                   return -- B/cancel - normal back-out
@@ -307,6 +354,7 @@ return function(mod)
             notify(("Gen1Coop:\nerreur clavier:\n%s"):format(wrapAddress(tostring(err))))
           end
         end },
+      { label = "JOUEURS", onSelect = function() showPlayerList() end },
     }, { title = "GEN1COOP" }))
   end
 
@@ -327,6 +375,105 @@ return function(mod)
     return next(game, items)
   end)
 
+  -- remotePlayerId -> { npcId = <string, only while spawned>, mapId, x, y }
+  -- npcId is nil whenever that player isn't on the local player's
+  -- current map - spawnNpc silently does nothing visible in that case
+  -- anyway, but tracking it explicitly means map.entered can re-sync
+  -- (spawn/despawn) cleanly instead of guessing from spawnNpc's result.
+  local remoteMarkers = {}
+
+  local function localMapId()
+    local cur = mod.world and mod.world:current()
+    return cur and cur.mapId
+  end
+
+  -- despawns and forgets the marker for one player - disconnect, or
+  -- about to respawn it fresh at a new position/map
+  local function clearMarker(id)
+    local m = remoteMarkers[id]
+    if m and m.npcId and mod.world then
+      mod.world:removeNpc(m.npcId)
+      m.npcId = nil
+    end
+  end
+
+  -- called on every position update for player `id`, and again from the
+  -- map.entered resync below. Always despawns and (if the player is on
+  -- the local player's current map) respawns fresh, rather than trying
+  -- to move an existing NPC - WorldAPI's Handle only offers scripted
+  -- step-by-step movement (scriptMove), not a direct teleport-to-position,
+  -- and a respawn-per-update is simplest for a first pass. Means markers
+  -- pop between positions instead of walking smoothly - known, fine for
+  -- proving this works at all.
+  local function updateMarker(id, mapId, x, y)
+    local m = remoteMarkers[id]
+    if not m then
+      m = {}
+      remoteMarkers[id] = m
+    end
+    m.mapId, m.x, m.y = mapId, x, y
+    clearMarker(id)
+    if not mod.world or mapId ~= localMapId() then return end
+    local npcId, err = mod.world:spawnNpc(mapId, {
+      sprite = spriteIdFor(id), x = x, y = y,
+    })
+    if npcId then
+      m.npcId = npcId
+    else
+      mod.log:warn("spawnNpc for player %d failed: %s", id, tostring(err))
+    end
+  end
+
+  local function removeMarker(id)
+    clearMarker(id)
+    remoteMarkers[id] = nil
+  end
+
+  -- local player changed maps: every tracked player's marker needs to
+  -- either appear (they were already on the new map, just not visible
+  -- before) or disappear (they're on whatever map was just left)
+  local function resyncMarkers()
+    if not mod.world then return end
+    for id, m in pairs(remoteMarkers) do
+      clearMarker(id)
+      if m.mapId == localMapId() then
+        local npcId, err = mod.world:spawnNpc(m.mapId, {
+          sprite = spriteIdFor(id), x = m.x, y = m.y,
+        })
+        if npcId then
+          m.npcId = npcId
+        else
+          mod.log:warn("spawnNpc (resync) for player %d failed: %s", id, tostring(err))
+        end
+      end
+    end
+  end
+
+  showPlayerList = function()
+    if not game then return end
+    local items = {}
+    local selfId = isHost and 0 or nil -- a client doesn't know its own id
+    if isHost then
+      items[#items + 1] = { label = "0 " .. PLAYER_COLOR_NAMES[0] .. " (toe)" }
+    end
+    local ids = {}
+    for id in pairs(remoteMarkers) do ids[#ids + 1] = id end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+      if id ~= selfId then
+        local name = PLAYER_COLOR_NAMES[id] or "?"
+        items[#items + 1] = { label = ("%d %s"):format(id, name) }
+      end
+    end
+    if #items == 0 then
+      items[#items + 1] = { label = "Personne encore" }
+    end
+    game.stack:push(ListMenu.new(game, "GEN1COOP", items, {
+      onChoose = function() end,
+      onCancel = function() end,
+    }))
+  end
+
   -- host only: keeps accepting new players every step, up to capacity,
   -- for as long as hosting is on (unlike the old single-peer version,
   -- this never stops accepting just because someone already joined)
@@ -339,7 +486,8 @@ return function(mod)
       nextPeerId = nextPeerId + 1
       table.insert(peers, { socket = s, id = id })
       mod.log:info("player %d joined (%d/%d)", id, #peers, MAX_PLAYERS - 1)
-      notify(("Gen1Coop:\njoueur %d\nconnecte!\n(%d/%d)"):format(id, #peers, MAX_PLAYERS - 1))
+      notify(("Gen1Coop:\njoueur %d (%s)\nconnecte!\n(%d/%d)"):format(
+        id, PLAYER_COLOR_NAMES[id] or "?", #peers, MAX_PLAYERS - 1))
     end
   end
 
@@ -371,6 +519,7 @@ return function(mod)
           local mapId, x, y = line:match("^(.-),(%-?%d+),(%-?%d+)$")
           if mapId then
             mod.log:info("player %d: map=%s x=%s y=%s", p.id, mapId, x, y)
+            updateMarker(p.id, mapId, tonumber(x), tonumber(y))
             local relayLine = string.format("%d,%s,%s,%s\n", p.id, mapId, x, y)
             for j, other in ipairs(peers) do
               if j ~= i then other.socket:send(relayLine) end
@@ -388,6 +537,7 @@ return function(mod)
     for i = #dead, 1, -1 do
       local p = peers[dead[i]]
       notify(("Gen1Coop:\njoueur %d\ndeconnecte."):format(p.id))
+      removeMarker(p.id)
       table.remove(peers, dead[i])
     end
   end
@@ -416,6 +566,7 @@ return function(mod)
         local id, mapId, x, y = line:match("^(%-?%d+),(.-),(%-?%d+),(%-?%d+)$")
         if id then
           mod.log:info("player %s: map=%s x=%s y=%s", id, mapId, x, y)
+          updateMarker(tonumber(id), mapId, tonumber(x), tonumber(y))
         end
       elseif err == "timeout" then
         break -- nothing more to read right now, try again next step
@@ -423,6 +574,7 @@ return function(mod)
         mod.log:warn("receive failed: %s - peer likely disconnected", tostring(err))
         peer = nil
         state = "error"
+        for id in pairs(remoteMarkers) do removeMarker(id) end
         break
       end
     end
@@ -467,4 +619,16 @@ return function(mod)
   mod.events:on("game.ready", function(payload)
     game = payload and payload.game
   end)
+
+  -- local player warped/walked onto a new map: every tracked remote
+  -- player's marker needs to be re-evaluated against the new map, not
+  -- just wait for that player's own next position update
+  mod.events:on("map.entered", function()
+    resyncMarkers()
+  end)
+
+  -- content registries merge before the game boots, same as
+  -- translation-qc's font/text registration - no need to wait for
+  -- game.ready for this part
+  registerMarkerSprites()
 end

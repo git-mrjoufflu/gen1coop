@@ -122,7 +122,11 @@ still running and you copied the address correctly.
   - this is the least-tested part of the mod (see `PROGRESS.md`'s
     v0.0.21 notes): the exact position is read off the engine's own
   render math rather than tuned against a real screenshot, so it may
-  need adjusting once it's actually seen in game.
+  need adjusting once it's actually seen in game. If you're using a
+  Tilt/3D/voxel render mode (any mod that replaces how the world itself
+  gets drawn), the floating label can't be placed correctly there, so
+  you'll instead see a small list of nearby players in the corner of the
+  screen.
 - Fixed default port (51820) for LAN hosting, not configurable in-game
   (yet). Relay addresses can use any port, since they're typed in full.
 - FIND HOST relies on UDP broadcast (port 51821), which some networks

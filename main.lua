@@ -197,6 +197,25 @@
 -- Windows Firewall blocking the new UDP port outright is the next
 -- likely suspect - outside anything this mod's own code can work around.
 --
+-- v0.0.27: "y'a plus les noms" after v0.0.25 shipped the Pipelines
+-- guard - turned out MrJoufflu plays with a 3D/voxel render mode on by
+-- default ("j'ai un mode 3D/voxel activé"), confirmed by asking
+-- directly rather than assuming. Every one of his screenshots so far
+-- was actually in that mode; the v0.0.25 fix was correct (the flat
+-- label really can't be placed there) but its effect - hiding names
+-- entirely - broke the feature for his normal way of playing, not just
+-- some rare edge case. Went looking for that pipeline's own source to
+-- draw against its real projection and found "vox3d"/voxel_world isn't
+-- part of this engine's source at all - it's a separate mod he
+-- installed, and there's no generic way to know how ANY given
+-- third-party pipeline maps world position to screen; that's owned by
+-- whichever mod wrote it. So instead of a per-sprite label in that
+-- mode, drawNearbyList draws a small corner list of who's on the local
+-- player's map, anchored to render.hud's own genuinely-documented
+-- viewport (letterbox/UI-canvas geometry) rather than the world canvas
+-- - correct regardless of what actually drew the world underneath it,
+-- which is exactly why it still works where the floating label can't.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -882,39 +901,38 @@ return function(mod)
   -- existed - see PROGRESS.md for the full history of why, and what
   -- changed to make this attempt worth trying now).
   --
-  -- render.hud's own viewport (src/core/Game.lua, docs/modding.md) is
-  -- explicitly letterbox-only geometry - "use the letterbox margins
-  -- without drawing over the playfield" - not the WORLD canvas's own
-  -- placement on screen, which isn't exposed to mods anywhere. This
-  -- reconstructs that placement itself, mirroring the exact math
-  -- Renderer:endFrame uses internally (src/render/Renderer.lua) for its
-  -- `elseif self.worldActive then` branch: displayMetrics() (window vs.
-  -- framebuffer pixels and per-axis DPI - built entirely from plain
-  -- love.graphics.* calls, not engine-private), Renderer:fitScale() (a
-  -- real public method), Zoom.scale() (public), and
-  -- Renderer.worldCanvas:getWidth/Height() (a real love Canvas -
-  -- PixelCanvas.lua's own comment confirms getWidth/Height "always
-  -- reported the requested size", so no need to also replicate
-  -- worldViewSize()'s own zoom/tilt sizing logic).
-  --
-  -- Deliberately conservative about when to even attempt this:
-  -- - game.stack:top() ~= the live overworld state -> skip. mod.world's
-  --   own overworld() resolves the world state even when something is
-  --   pushed OVER it (a menu, a battle) - "so a state pushed over the
-  --   world still resolves to the world underneath it" - which is right
-  --   for spawnNpc/etc, but wrong here: a label must only draw when the
-  --   world is actually what's on screen, not guessed to be underneath
-  --   something opaque.
-  -- - Tilt.active() -> skip. Tilt mode projects the ground through a
-  --   perspective mesh (src/render/Tilt.lua's drawTiltedWorld) - not a
-  --   flat linear map, so this math would place labels wrong instead of
-  --   just not placing them. Skipping is honest; guessing isn't.
-  -- Each marker's own draw is wrapped in its own pcall with the
-  -- push/pop OUTSIDE the pcall, so one marker's failure can't leave
-  -- love.graphics's transform/color stack unbalanced for anything drawn
-  -- after it (TouchControls, or next frame) - this is screen-space code
-  -- I can't watch run, so it has to fail safely by construction, not by
-  -- hoping it doesn't fail.
+  -- Two draw paths, picked in drawNameLabels below:
+  -- 1. Flat vanilla rendering (no Tilt, no third-party pipeline): a real
+  --    per-sprite floating label, anchored to the world canvas. render.hud's
+  --    own viewport (src/core/Game.lua, docs/modding.md) is explicitly
+  --    letterbox-only geometry - "use the letterbox margins without
+  --    drawing over the playfield" - not the WORLD canvas's own
+  --    placement on screen, which isn't exposed to mods anywhere. This
+  --    reconstructs that placement itself, mirroring the exact math
+  --    Renderer:endFrame uses internally (src/render/Renderer.lua) for
+  --    its `elseif self.worldActive then` branch: displayMetrics()
+  --    (window vs. framebuffer pixels and per-axis DPI - built entirely
+  --    from plain love.graphics.* calls, not engine-private),
+  --    Renderer:fitScale() (a real public method), Zoom.scale()
+  --    (public), and Renderer.worldCanvas:getWidth/Height() (a real love
+  --    Canvas - PixelCanvas.lua's own comment confirms getWidth/Height
+  --    "always reported the requested size", so no need to also
+  --    replicate worldViewSize()'s own zoom/tilt sizing logic).
+  -- 2. Tilt or a third-party render pipeline active: drawNearbyList, a
+  --    small corner list anchored to render.hud's own genuinely-documented
+  --    viewport instead - see that function's comment for why.
+  -- Common gate either way: game.stack:top() ~= the live overworld state
+  -- -> skip entirely. mod.world's own overworld() resolves the world
+  -- state even when something is pushed OVER it (a menu, a battle) -
+  -- "so a state pushed over the world still resolves to the world
+  -- underneath it" - which is right for spawnNpc/etc, but wrong here: a
+  -- label must only draw when the world is actually what's on screen,
+  -- not guessed to be underneath something opaque.
+  -- Both paths wrap each draw in its own pcall with push/pop OUTSIDE the
+  -- pcall, so one failure can't leave love.graphics's transform/color
+  -- stack unbalanced for anything drawn after it (TouchControls, or next
+  -- frame) - this is screen-space code I can't watch run, so it has to
+  -- fail safely by construction, not by hoping it doesn't fail.
   local function displayMetrics()
     local ww, wh = love.graphics.getDimensions()
     local pw, ph = ww, wh
@@ -951,25 +969,88 @@ return function(mod)
     Font.draw(name, -w / 2, 0)
   end
 
-  local function drawNameLabels(g)
+  -- fallback for whenever the flat worldCanvas math below can't be
+  -- trusted (Tilt, or ANY third-party render pipeline - "vox3d" turned
+  -- out to be mods/voxel_world, a mod not even present in this engine's
+  -- own source, so there's no way to know how it - or any other such
+  -- mod - projects world positions to screen; that's specific to
+  -- whatever mod wrote it, not something reconstructible from the
+  -- outside the way the vanilla flat blit was). Confirmed with
+  -- MrJoufflu this is his NORMAL way of playing ("j'ai un mode 3D/voxel
+  -- activé"), not a rare edge case - so rather than just hiding names
+  -- there, this draws a small corner list instead, anchored to
+  -- render.hud's own DOCUMENTED viewport (pure letterbox/UI-canvas
+  -- geometry - "use the letterbox margins without drawing over the
+  -- playfield," docs/modding.md) rather than the world canvas. That
+  -- geometry is correct no matter what actually drew the world
+  -- underneath it, which is exactly why it works here where the
+  -- per-sprite floating label can't.
+  local NEARBY_LIST_SCALE = 0.5
+  local MAX_NEARBY_SHOWN = 5
+
+  -- runs already inside love.graphics.push()/pop() from the caller
+  local function drawNearbyListInner(viewport, names)
+    local sx = viewport.scale / viewport.dpiX
+    local sy = viewport.scale / viewport.dpiY
+    love.graphics.translate(viewport.gameX, viewport.gameY)
+    love.graphics.scale(sx * NEARBY_LIST_SCALE, sy * NEARBY_LIST_SCALE)
+    local lineH = 9
+    local w = 0
+    for _, n in ipairs(names) do w = math.max(w, Font.width(n)) end
+    love.graphics.setColor(1, 1, 1, 0.85)
+    love.graphics.rectangle("fill", 2, 2, w + 4, #names * lineH + 2)
+    love.graphics.setColor(0, 0, 0, 1)
+    for i, n in ipairs(names) do
+      Font.draw(n, 4, 3 + (i - 1) * lineH)
+    end
+  end
+
+  local function drawNearbyList(viewport)
+    if not viewport or not viewport.gameX or not viewport.gameY
+       or not viewport.scale or not viewport.dpiX or not viewport.dpiY then
+      return
+    end
+    local names = {}
+    for id, m in pairs(remoteMarkers) do
+      if m.npcId then
+        names[#names + 1] = remoteNames[id] or PLAYER_LABELS[id] or "?"
+      end
+    end
+    if #names == 0 then return end
+    table.sort(names)
+    for i = #names, MAX_NEARBY_SHOWN + 1, -1 do names[i] = nil end
+    love.graphics.push()
+    local ok, err = pcall(drawNearbyListInner, viewport, names)
+    love.graphics.pop()
+    if not ok then
+      mod.log:warn("nearby-players list draw failed: %s", tostring(err))
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+  end
+
+  local function drawNameLabels(g, viewport)
     if not mod.world then return end
     local ow = mod.world:overworld()
-    if not ow or not ow.camera or not Renderer.worldCanvas then return end
-    if not g or not g.stack or g.stack:top() ~= ow then return end
-    if Tilt.active() then return end
-    -- a mod-supplied world pipeline (e.g. mods/voxel_world, "vox3d")
-    -- replaces the whole world pass with its own 3D/diorama render via
-    -- Renderer:setWorldOverride - the flat worldCanvas geometry below is
-    -- meaningless there (confirmed with a real screenshot: the label
-    -- floated free of the sprite and drifted around instead of sitting
-    -- still above its head). Renderer.worldOverride itself gets reset to
-    -- nil at the end of every endFrame, so it can't be checked from here
-    -- ("was a pipeline active THIS frame" isn't visible by the time
-    -- render.hud runs) - Pipelines.worldPipeline() answers the
-    -- persistent question ("is one active right now") instead, the same
-    -- query src/render/Renderer.lua itself uses to decide whether to
-    -- call a pipeline's drawWorld this frame.
-    if Pipelines.worldPipeline() then return end
+    if not ow or not g or not g.stack or g.stack:top() ~= ow then return end
+
+    -- Tilt.active(): Tilt mode projects the ground through a perspective
+    -- mesh (src/render/Tilt.lua's drawTiltedWorld) - not a flat linear
+    -- map. Pipelines.worldPipeline(): a mod-supplied world pipeline (see
+    -- this function's own comment above) owns the world pass instead of
+    -- the vanilla flat blit - same problem, unknowable geometry. Either
+    -- one routes to the corner list instead of the per-sprite label.
+    -- Renderer.worldOverride itself can't be checked here for the
+    -- pipeline case - like worldActive, it's reset to nil at the end of
+    -- every endFrame, so "was a pipeline active THIS frame" isn't
+    -- visible by the time render.hud runs; worldPipeline() answers the
+    -- persistent "is one active right now" question instead, the same
+    -- query src/world/OverworldController.lua itself uses to decide
+    -- whether to hand the frame to a pipeline.
+    if Tilt.active() or Pipelines.worldPipeline() then
+      drawNearbyList(viewport)
+      return
+    end
+    if not ow.camera or not Renderer.worldCanvas then return end
 
     local pw, ph, dpiX, dpiY = displayMetrics()
     local Sp = Renderer:fitScale()
@@ -1288,7 +1369,7 @@ return function(mod)
   -- the safety rationale for the pcall/push/pop structure - `g` is
   -- Game.lua's own `self`, needed for the g.stack:top() visibility check
   mod.hooks:wrap("render.hud", function(next, g, viewport)
-    drawNameLabels(g)
+    drawNameLabels(g, viewport)
     return next(g, viewport)
   end)
 

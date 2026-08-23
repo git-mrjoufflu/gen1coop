@@ -10,6 +10,43 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.27: names vanished entirely - the v0.0.25 fix broke his default setup
+
+MrJoufflu, right after v0.0.25/26: "y'a plus les noms" (the names are
+gone). Rather than assume, asked directly whether he had a 3D/voxel
+render mode enabled - "Oui, j'ai un mode 3D/voxel activé." That single
+answer reframed the whole situation: every screenshot he'd sent so far
+(the oversized-label one, the drifting one) was in that mode, not a
+one-off test - it's his normal way of playing. The v0.0.25 fix (skip
+the floating label when a pipeline owns the world pass) was correct on
+its own terms, but its actual effect for him was "the feature I asked
+for doesn't exist," not "the feature is occasionally unavailable."
+
+Went looking for `voxel_world`'s own source to draw against its real
+projection math and found it isn't part of this engine's checkout at
+all - `docs/modding.md` names it only as an illustrative example for
+the `render_pipelines` feature, not a bundled mod. Since MrJoufflu is
+running some actual separate mod that provides his "vox3d" look (not
+necessarily even called voxel_world), there is no way to know its
+projection from the engine's own source - that math belongs entirely to
+whichever mod wrote it, and would differ between different pipeline
+mods anyway. A per-sprite floating label genuinely cannot be built
+against an unknown third-party projection.
+
+What CAN be built regardless of which pipeline (if any) drew the world:
+a small corner list, using `render.hud`'s own actually-documented
+`viewport` (pure letterbox/UI-canvas placement, unaffected by whatever
+drew the world underneath it - unlike the world canvas, this geometry
+*is* exposed to mods deliberately). `drawNameLabels` now branches:
+`Tilt.active() or Pipelines.worldPipeline()` routes to the new
+`drawNearbyList` (names of everyone currently on the local player's
+map, alphabetized, capped at 5, pinned to the corner of the actual
+play area) instead of returning nothing; the flat/vanilla case is
+unchanged from v0.0.21-26. Same pcall-around-drawing /
+push-pop-outside-pcall safety pattern as the floating label. Not yet
+seen in real gameplay - the geometry (corner position, list size) is a
+first guess, same as every other pixel value in this feature so far.
+
 ## v0.0.26: FIND HOST still not finding anything - try the subnet broadcast too
 
 MrJoufflu: "ca ne fonctionne pas l'auto host." Vague on its own, so

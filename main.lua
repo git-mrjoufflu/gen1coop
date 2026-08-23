@@ -41,6 +41,25 @@
 -- player's current map; START > GEN1COOP > JOUEURS lists who's known
 -- and their color at any time.
 --
+-- v0.0.16: real pixel-art person markers (was a flat circle) - see
+-- assets/sprites/generate_sprites.py. Also: each player can set a name
+-- (START > GEN1COOP > MON NOM, vanilla naming-screen alphabet, 8 chars
+-- like a Gen1 trainer name) that now rides along on every position update
+-- (wire format grew a trailing ",name" field - see hostBroadcastOwn/
+-- sendPosition/hostReceiveAndRelay/receivePositions) and shows in the
+-- JOUEURS list and disconnect notices. Deliberately NOT drawn floating
+-- over each marker in the world: render.hud's viewport (src/core/Game.lua,
+-- documented in docs/modding.md) only exposes the UI-canvas/letterbox
+-- geometry ("use the letterbox margins without drawing over the
+-- playfield") - the world canvas's own camera-relative offset/scale
+-- (Renderer:endFrame's wox/woy/sx/sy, src/render/Renderer.lua) that would
+-- be needed to project a tile position to the right screen pixel isn't
+-- part of the modding API. Doing it anyway would mean reaching into
+-- renderer internals with no stability guarantee - exactly the kind of
+-- reach-around this project has avoided everywhere else (networking
+-- needed a real declared permission; this doesn't even have that door).
+-- JOUEURS already solves the actual ask ("se reconnaitre") without that risk.
+--
 -- Known rough edges, on purpose for a first slice:
 -- - Fixed default port 51820 for LAN hosting.
 -- - No reconnect handling if a connection drops.
@@ -110,13 +129,23 @@ return function(mod)
     { "lower case" },
   }
 
+  local NAME_TITLE = "TON NOM?"
+  local DEFAULT_NAME = "JOUEUR"
+  -- comma is the wire-protocol field separator - typed names can't ever
+  -- contain one since NamingScreen only offers whatever's in the active
+  -- grid, and this screen uses the vanilla alphabet grid (no
+  -- ui.naming.grid override), which has none
+  local function localName()
+    return mod.save:get("player_name", DEFAULT_NAME)
+  end
+
   local game = nil -- captured from game.ready; needed to push any UI
-  -- forward-declared: openConnectMenu's JOUEURS item references this
-  -- before its real body is defined further down (needs remoteMarkers,
-  -- which needs PLAYER_COLOR_NAMES et al. to exist first) - Lua resolves
-  -- an undeclared name as a global, not "not yet assigned", so the
-  -- `local` here has to come before anything that reads it, even though
-  -- the assignment comes later
+  -- forward-declared: openConnectMenu's JOUEURS item references these
+  -- before their real bodies are defined further down (need
+  -- remoteMarkers/remoteNames, which need PLAYER_COLOR_NAMES et al. to
+  -- exist first) - Lua resolves an undeclared name as a global, not "not
+  -- yet assigned", so the `local` here has to come before anything that
+  -- reads it, even though the assignment comes later
   local showPlayerList
 
   -- game.ready can fire before the player is actually in control (title
@@ -355,6 +384,23 @@ return function(mod)
           end
         end },
       { label = "JOUEURS", onSelect = function() showPlayerList() end },
+      { label = "MON NOM", onSelect = function()
+          -- no title override here, so ui.naming.grid's hook (scoped to
+          -- NAMING_TITLE/ADDRESS_GRID) doesn't touch this screen - it
+          -- falls through to the vanilla alphabet grid, which is exactly
+          -- what a person's name needs and ADDRESS_GRID doesn't have
+          -- (real names want lowercase, no digits/colon clutter)
+          game.stack:push(NamingScreen.new(game, {
+            title = NAME_TITLE,
+            maxLen = 8,
+            default = localName(),
+            onDone = function(name, confirmed)
+              if not confirmed or name == "" then return end
+              mod.save:set("player_name", name)
+              notify(("Gen1Coop:\nton nom:\n%s"):format(name))
+            end,
+          }))
+        end },
     }, { title = "GEN1COOP" }))
   end
 
@@ -382,6 +428,12 @@ return function(mod)
   -- (spawn/despawn) cleanly instead of guessing from spawnNpc's result.
   local remoteMarkers = {}
 
+  -- remotePlayerId -> last name they sent, or nil until their first
+  -- position update arrives. Separate table from remoteMarkers since a
+  -- name is known even for players not currently on the local player's
+  -- map (no npcId yet), e.g. for the JOUEURS list.
+  local remoteNames = {}
+
   local function localMapId()
     local cur = mod.world and mod.world:current()
     return cur and cur.mapId
@@ -405,7 +457,8 @@ return function(mod)
   -- and a respawn-per-update is simplest for a first pass. Means markers
   -- pop between positions instead of walking smoothly - known, fine for
   -- proving this works at all.
-  local function updateMarker(id, mapId, x, y)
+  local function updateMarker(id, mapId, x, y, name)
+    if name and name ~= "" then remoteNames[id] = name end
     local m = remoteMarkers[id]
     if not m then
       m = {}
@@ -427,6 +480,7 @@ return function(mod)
   local function removeMarker(id)
     clearMarker(id)
     remoteMarkers[id] = nil
+    remoteNames[id] = nil
   end
 
   -- local player changed maps: every tracked player's marker needs to
@@ -454,15 +508,16 @@ return function(mod)
     local items = {}
     local selfId = isHost and 0 or nil -- a client doesn't know its own id
     if isHost then
-      items[#items + 1] = { label = "0 " .. PLAYER_COLOR_NAMES[0] .. " (toe)" }
+      items[#items + 1] = { label = "0 " .. localName() .. " (toe)" }
     end
     local ids = {}
     for id in pairs(remoteMarkers) do ids[#ids + 1] = id end
     table.sort(ids)
     for _, id in ipairs(ids) do
       if id ~= selfId then
-        local name = PLAYER_COLOR_NAMES[id] or "?"
-        items[#items + 1] = { label = ("%d %s"):format(id, name) }
+        local color = PLAYER_COLOR_NAMES[id] or "?"
+        local name = remoteNames[id] or color
+        items[#items + 1] = { label = ("%d %s (%s)"):format(id, name, color) }
       end
     end
     if #items == 0 then
@@ -492,15 +547,20 @@ return function(mod)
   end
 
   -- Wire format is asymmetric on purpose: a client's outgoing line is
-  -- untagged ("mapId,x,y") since the host already knows who sent it from
-  -- which socket the data arrived on; everything the host sends out is
-  -- tagged ("id,mapId,x,y") since the receiving client needs to know
-  -- whose position this is, and it could be the host's or any peer's.
+  -- untagged ("mapId,x,y,name") since the host already knows who sent it
+  -- from which socket the data arrived on; everything the host sends out
+  -- is tagged ("id,mapId,x,y,name") since the receiving client needs to
+  -- know whose position this is, and it could be the host's or any
+  -- peer's. name is always the LAST field specifically so mapId (which
+  -- can itself contain digits/underscores but never a comma) stays easy
+  -- to pattern-match without worrying about name's contents shifting
+  -- field positions.
 
   -- host only, tied to the host's own movement (world.stepped): sends
   -- the host's own position to every connected player, tagged id 0.
   local function hostBroadcastOwn(payload)
-    local hostLine = string.format("0,%s,%d,%d\n", tostring(payload.mapId), payload.x, payload.y)
+    local hostLine = string.format("0,%s,%d,%d,%s\n",
+      tostring(payload.mapId), payload.x, payload.y, localName())
     for _, p in ipairs(peers) do
       p.socket:send(hostLine) -- best-effort; a dead peer gets cleaned up below
     end
@@ -516,11 +576,11 @@ return function(mod)
       while true do
         local line, err = p.socket:receive("*l")
         if line then
-          local mapId, x, y = line:match("^(.-),(%-?%d+),(%-?%d+)$")
+          local mapId, x, y, name = line:match("^(.-),(%-?%d+),(%-?%d+),(.*)$")
           if mapId then
-            mod.log:info("player %d: map=%s x=%s y=%s", p.id, mapId, x, y)
-            updateMarker(p.id, mapId, tonumber(x), tonumber(y))
-            local relayLine = string.format("%d,%s,%s,%s\n", p.id, mapId, x, y)
+            mod.log:info("player %d: map=%s x=%s y=%s name=%s", p.id, mapId, x, y, name)
+            updateMarker(p.id, mapId, tonumber(x), tonumber(y), name)
+            local relayLine = string.format("%d,%s,%s,%s,%s\n", p.id, mapId, x, y, name)
             for j, other in ipairs(peers) do
               if j ~= i then other.socket:send(relayLine) end
             end
@@ -536,7 +596,8 @@ return function(mod)
     end
     for i = #dead, 1, -1 do
       local p = peers[dead[i]]
-      notify(("Gen1Coop:\njoueur %d\ndeconnecte."):format(p.id))
+      local name = remoteNames[p.id] or PLAYER_COLOR_NAMES[p.id] or "?"
+      notify(("Gen1Coop:\n%s\ndeconnecte."):format(name))
       removeMarker(p.id)
       table.remove(peers, dead[i])
     end
@@ -546,7 +607,8 @@ return function(mod)
   -- (see hostRelay's comment on the wire format)
   local function sendPosition(payload)
     if not peer then return end
-    local line = string.format("%s,%d,%d\n", tostring(payload.mapId), payload.x, payload.y)
+    local line = string.format("%s,%d,%d,%s\n",
+      tostring(payload.mapId), payload.x, payload.y, localName())
     local ok, err = peer:send(line)
     if not ok and err ~= "timeout" then
       mod.log:warn("send failed: %s - peer likely disconnected", tostring(err))
@@ -563,10 +625,10 @@ return function(mod)
     while true do
       local line, err = peer:receive("*l")
       if line then
-        local id, mapId, x, y = line:match("^(%-?%d+),(.-),(%-?%d+),(%-?%d+)$")
+        local id, mapId, x, y, name = line:match("^(%-?%d+),(.-),(%-?%d+),(%-?%d+),(.*)$")
         if id then
-          mod.log:info("player %s: map=%s x=%s y=%s", id, mapId, x, y)
-          updateMarker(tonumber(id), mapId, tonumber(x), tonumber(y))
+          mod.log:info("player %s: map=%s x=%s y=%s name=%s", id, mapId, x, y, name)
+          updateMarker(tonumber(id), mapId, tonumber(x), tonumber(y), name)
         end
       elseif err == "timeout" then
         break -- nothing more to read right now, try again next step

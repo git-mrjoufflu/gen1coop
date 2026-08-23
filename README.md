@@ -51,7 +51,9 @@ digits), since a relay address needs them.
 ## What this does
 
 - Everything is driven from an in-game menu: open the **START** menu,
-  select **GEN1COOP**, then **HOST** or **JOIN**.
+  select **GEN1COOP**, then **HOST** or **JOIN**. **MON NOM** sets your
+  display name (shown to everyone else in their **JOUEURS** list); it
+  defaults to "JOUEUR" if you never set one.
 - Every time a player takes a step, their map/x/y position is sent to
   whoever they're connected to (the LAN host, or the relay server),
   which forwards it to every other connected player.
@@ -97,17 +99,22 @@ still running and you copied the address correctly.
 
 ## Known limitations (on purpose, for this first step)
 
-- No visible avatar for other players yet - just textboxes and log lines.
+- Other players show up as a small colored pixel-art marker on the map,
+  not a real animated character sprite. Their name only shows in the
+  **JOUEURS** list, not floating over their marker in the world (the
+  engine doesn't expose the world-camera geometry mods would need to
+  place it correctly - see `PROGRESS.md`'s v0.0.16 notes for why).
 - Fixed default port (51820) for LAN hosting, not configurable in-game
   (yet). Relay addresses can use any port, since they're typed in full.
 - LAN star topology: if the host quits, everyone's connection drops (the
   host's own game is the relay, not a separate server). Relay mode
   doesn't have this problem, but does depend on the relay server staying
   up.
-- The connection is only serviced when the local player takes a step
-  (not every frame) - a smoother per-frame tick needs a render hook,
-  which isn't worth the risk of breaking rendering before the basics are
-  solid.
+- Outgoing position updates (your own movement) only send when you
+  actually take a step, not every frame - fine, since there'd be nothing
+  new to send anyway. Everything else (accepting joins, receiving/
+  relaying other players' updates, detecting a completed connection)
+  runs every engine step regardless of your own movement, since v0.0.14.
 - No reconnect handling if a connection drops mid-session.
 - Requires the gen1recomp mod sandbox's "network" permission (declared
   in manifest.json) - `require("socket")` is denied without it.
@@ -117,7 +124,8 @@ still running and you copied the address correctly.
 
 ## Next steps (not built yet)
 
-Once multiplayer (both modes) is confirmed working with real people:
-spawn a visible placeholder sprite for each connected player at their
-last reported position, then look at gen1recomp's NPC/sprite APIs for
-something closer to a real avatar.
+Smooth marker movement (interpolation instead of teleporting between
+updates) and facing direction; a real animated character sprite instead
+of a flat pixel-art marker; internet/relay play confirmed with real
+people (still only LAN-tested); more than 2-3 simultaneous players
+confirmed.

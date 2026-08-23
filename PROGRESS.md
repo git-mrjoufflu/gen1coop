@@ -10,6 +10,65 @@ source; everything here is written from scratch).
 
 Separate project from `translation-qc` — different purpose, different repo.
 
+## v0.0.16: real sprites + player names - not yet tested
+
+MrJoufflu's ask after confirming v0.0.15 worked: "la ça prend des vrai
+sprite, mais surtout la possibilité de mettre un nom en ligne a la
+personnes pour ce reconnaitre" (real sprites, but MOSTLY the ability to
+set a name so people recognize each other).
+
+- `assets/sprites/generate_sprites.py` (renamed from the throwaway
+  `_generate.py` - this is a real, keep-in-repo tool now, not a one-off):
+  redrawn from a flat filled circle to an actual little person silhouette
+  (skin-toned round head with two eye dots, a colored trapezoid torso, two
+  dark feet stubs), same 16x16 `trueColor` single-frame approach as
+  v0.0.15 otherwise. Regenerated all 10 `player_N.png`; verified by eye
+  via a scaled-up preview render, not in-game yet.
+- START > GEN1COOP > MON NOM: a new menu item opening a `NamingScreen`
+  with NO custom grid override (uses the vanilla alphabet keypad, not
+  `ADDRESS_GRID` - names want letters/lowercase, not digits/colon), 8
+  chars max (same ballpark as a Gen1 trainer name). Stored via
+  `mod.save:set("player_name", ...)`, read back by `localName()`
+  (defaults to "JOUEUR" until set).
+- Wire protocol grew a trailing name field on every position update:
+  client -> host `mapId,x,y,name`, host -> client `id,mapId,x,y,name`.
+  Name is always the LAST field on purpose, so the existing `mapId`
+  capture pattern doesn't need to change shape, just extend by one comma
+  group. `remoteNames[id]` (separate table from `remoteMarkers`, so a
+  name is known even for a player not currently on the local player's
+  map) is set from `updateMarker()`'s new optional `name` argument.
+  `relay_server.py` needs no code change - it treats each line after the
+  sender-tag as opaque text and just re-prepends the id, so the extra
+  field rides through untouched (not yet re-tested against the new
+  format, but the mechanism doesn't parse fields at all).
+- JOUEURS now shows `id name (color)` instead of just the color, falling
+  back to the color name if no position update (and therefore no name)
+  has arrived from that player yet. Disconnect notices on the host
+  ("joueur N deconnecte") now use the last known name too, same fallback.
+- **Deliberately did NOT draw the name floating over each marker in the
+  world**, even though that's arguably the more obviously "real"
+  interpretation of the ask. Checked `render.hud` (`src/core/Game.lua`,
+  documented in `docs/modding.md`) in detail: its `viewport` argument is
+  explicitly scoped to "the letterbox margins without drawing over the
+  playfield" - `gameX/gameY/gameWidth/gameHeight/scale/dpiX/dpiY`
+  describe where the UI canvas lands on screen, not the world canvas.
+  The world canvas has its OWN separate offset/scale
+  (`Renderer:endFrame`'s `wox/woy/sx/sy`, computed from `worldViewSize()`
+  and the survey zoom) that isn't part of the viewport handed to mods at
+  all, and isn't exposed anywhere else either. Projecting a tracked
+  player's tile position to the exact screen pixel their sprite is
+  drawn at would mean either duplicating that internal math and hoping
+  it stays in sync with the engine (fragile - it already varies with
+  zoom, tilt, DPI, FAITHFUL RATIO lock), or reaching directly into
+  `Renderer` internals the same way this project has specifically avoided
+  doing everywhere else (networking needed a real declared `permissions`
+  entry; there's no equivalent sanctioned door here at all). JOUEURS
+  already delivers the actual ask - recognizing who's who - without that
+  risk. Worth reopening if gen1recomp ever exposes a real world-to-screen
+  helper for mods.
+- Not yet tested in a real game - same caveat as every version before
+  the one MrJoufflu actually confirms.
+
 ## Step 2 CONFIRMED WORKING (v0.0.15)
 
 MrJoufflu confirmed the colored marker actually shows up in a real test
